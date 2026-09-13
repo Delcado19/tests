@@ -111,6 +111,15 @@ def main() -> int:
             "Theme not found in gallery data" in result_unknown.stderr,
             f"an unknown theme name should hit the not-found path: stderr={result_unknown.stderr!r}",
         )
+        # The whole point of the not-found path: fzf's preview pane shows
+        # get_theme_preview()'s return value, not just a debug log the user
+        # never sees. main() used to discard it, leaving the pane blank.
+        check(
+            "Image preview not found for DoesNotExist" in result_unknown.stdout,
+            f"an unknown theme name should say so on stdout (what the fzf "
+            f"preview pane actually shows), not just in the debug log: "
+            f"stdout={result_unknown.stdout!r}",
+        )
 
     # Gallery data unavailable entirely (no hyde-themes.json -- a fresh
     # machine with --skip-clone, or a failed clone): JSON_DATA stays None,
@@ -128,6 +137,11 @@ def main() -> int:
         check(
             result_no_data.returncode == 0,
             f"--preview with no gallery data exited {result_no_data.returncode}: {result_no_data.stderr}",
+        )
+        check(
+            "Image preview not found for Anything" in result_no_data.stdout,
+            f"missing gallery data should say so on stdout, not just avoid crashing: "
+            f"stdout={result_no_data.stdout!r}",
         )
 
     return failures
