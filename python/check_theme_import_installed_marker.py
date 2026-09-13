@@ -17,6 +17,7 @@ not just that the script doesn't crash on it.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
@@ -37,6 +38,38 @@ def check(condition: bool, message: str) -> None:
     if not condition:
         failures += 1
         print(f"    fail: {message}")
+
+
+def load_theme_import():
+    # theme.import.py's own directory has to be on sys.path first: it does
+    # `import pyutils.wrapper.fzf`, a sibling package, not an installed one.
+    lib_dir = str(SCRIPT_PATH.parent)
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    spec = importlib.util.spec_from_file_location("theme_import_under_test", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_strip_installed_marker() -> None:
+    # strip_installed_marker() is the one function both consumers share --
+    # get_theme_preview()'s JSON lookup and fzf_menu()'s final
+    # SELECTED_THEMES list. Unit-testing it directly covers both call sites
+    # at once; simulating fzf_menu()'s actual interactive selection isn't
+    # practical from a black-box test.
+    mod = load_theme_import()
+    for label, marked, expected in [
+        ("ansi-stripped glyph (real fzf output)", mod.INSTALLED_GLYPH + "Windows 11", "Windows 11"),
+        ("still-colored prefix", mod.INSTALLED_PREFIX + "Windows 11", "Windows 11"),
+        ("not-installed prefix", mod.NOT_INSTALLED_PREFIX + "Electra", "Electra"),
+        ("no prefix at all", "Electra", "Electra"),
+    ]:
+        got = mod.strip_installed_marker(marked)
+        check(
+            got == expected,
+            f"strip_installed_marker() with {label}: got {got!r}, expected {expected!r}",
+        )
 
 
 def run_preview(cache_home: pathlib.Path, theme_arg: str):
@@ -70,6 +103,8 @@ def check_resolves(cache_home: pathlib.Path, theme_arg: str, label: str) -> None
 
 
 def main() -> int:
+    check_strip_installed_marker()
+
     with __import__("tempfile").TemporaryDirectory() as tmp:
         tmp_path = pathlib.Path(tmp)
         # Matches theme.import.py's own CLONE_DIR: os.path.join(XDG_CACHE_HOME, "hyde/gallery-database")
