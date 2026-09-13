@@ -8,11 +8,16 @@ if ! command -v luac >/dev/null 2>&1; then
     finish
 fi
 
+files_list=$(mktemp) || exit 1
+trap 'rm -f "$files_list"' EXIT
+
+find "$REPO_ROOT/Configs" -name '*.lua' -type f | sort > "$files_list"
+
 count=0
-for file in $(find "$REPO_ROOT/Configs" -name '*.lua' -type f | sort); do
+while IFS= read -r file; do
     count=$((count + 1))
     luac -p "$file" >/dev/null 2>&1 || fail "${file#"$REPO_ROOT"/} does not parse"
-done
+done < "$files_list"
 
 printf '    %d file(s) checked\n' "$count"
 finish

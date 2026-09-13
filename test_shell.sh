@@ -11,14 +11,18 @@
 
 . "$(dirname -- "$0")/lib/common.sh"
 
-scripts=$(find "$REPO_ROOT/Configs" "$REPO_ROOT/Scripts" "$REPO_ROOT/tests" -name '*.sh' -type f | sort)
+scripts_list=$(mktemp) || exit 1
+report_file=$(mktemp) || exit 1
+trap 'rm -f "$scripts_list" "$report_file"' EXIT
+
+find "$REPO_ROOT/Configs" "$REPO_ROOT/Scripts" "$REPO_ROOT/tests" -name '*.sh' -type f | sort > "$scripts_list"
 
 count=0
-for file in $scripts; do
+while IFS= read -r file; do
     count=$((count + 1))
 
     bash -n "$file" 2>/dev/null || fail "${file#"$REPO_ROOT"/} does not parse"
-done
+done < "$scripts_list"
 
 printf '    %d file(s) parsed\n' "$count"
 
@@ -27,13 +31,15 @@ if ! command -v shellcheck >/dev/null 2>&1; then
     finish
 fi
 
-report=$(printf '%s\n' "$scripts" | xargs shellcheck --severity=error --format=gcc)
-status=$?
+status=0
+while IFS= read -r file; do
+    shellcheck --severity=error --format=gcc "$file" >> "$report_file" || status=$?
+done < "$scripts_list"
 
-if [ -n "$report" ]; then
-    printf '%s\n' "$report" | while IFS= read -r line; do
+if [ -s "$report_file" ]; then
+    while IFS= read -r line; do
         printf '    %s\n' "$line"
-    done
+    done < "$report_file"
     fail "shellcheck reported error-severity findings"
 elif [ "$status" -ne 0 ]; then
     fail "shellcheck exited with $status without reporting anything"
@@ -42,7 +48,7 @@ fi
 # SC3xxx is the dialect family: a construct the shebang's shell does not have.
 # It is reported below error severity, so it needs its own pass.
 posix_count=0
-for file in $scripts; do
+while IFS= read -r file; do
     case $(head -n 1 "$file") in
         '#!'*[!a-z]sh | '#!'*[!a-z]sh' '*) ;;
         *) continue ;;
@@ -57,7 +63,7 @@ for file in $scripts; do
         printf '    %s\n' "$line"
     done
     fail "${file#"$REPO_ROOT"/} declares sh but uses constructs sh does not have"
-done
+done < "$scripts_list"
 
 printf '    %d file(s) checked against the sh dialect\n' "$posix_count"
 
