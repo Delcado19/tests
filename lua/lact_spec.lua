@@ -95,6 +95,23 @@ check(ok2 and decoded2.tooltip:find("Clock Speed: N/A/N/A MHz", 1, true) ~= nil,
 check(ok2 and decoded2.tooltip:find("Power Usage: N/A/N/A W", 1, true) ~= nil, "missing power values were not rendered as N/A")
 check(ok2 and not decoded2.text:find("<span", 1, true), "a device with no real temperature should not be colorized")
 
+-- generate_json: daemon-supplied strings (vendor/family/name) are rendered
+-- as Pango markup by Waybar (custom/lact.jsonc doesn't set "escape": true),
+-- so raw '<', '>' and '&' must come out as literal entities, not markup.
+local hostile = lact.generate_json({
+    {primary_gpu = "AMD & Co <Test>", vendor = "Ry<zen>", family = "RDNA & 3", temperature = 50},
+})
+local ok3, decoded3 = pcall(json.decode, hostile)
+check(ok3, "generate_json with special-character device strings did not produce valid JSON")
+check(
+    ok3 and decoded3.tooltip:find("Ry&lt;zen&gt; RDNA &amp; 3 AMD &amp; Co &lt;Test&gt;", 1, true) ~= nil,
+    "special characters in vendor/family/name were not pango-escaped: " .. tostring(ok3 and decoded3.tooltip)
+)
+check(
+    ok3 and not decoded3.tooltip:find("<Test>", 1, true) and not decoded3.tooltip:find("<zen>", 1, true),
+    "raw angle brackets from daemon strings leaked into the tooltip unescaped"
+)
+
 -- generate_json: out-of-spec numeric input (negative, absurdly high,
 -- non-numeric string) must clamp/degrade instead of raising or producing an
 -- invalid percentage.
