@@ -23,6 +23,8 @@ is adding a file.
 | `test_binds.sh` | Loads the Lua keybinds against a stubbed Hyprland API: no two binds share a combination once modifiers are folded to what Hyprland matches on, no keysym sits in a modifier position, no bind uses the `code:NN` form the Lua parser rejects, every bind has a description, every `hyde-shell` command it runs exists. Touchpad gestures are checked in the same pass: a valid finger count, a direction and action Hyprland accepts, and no two gestures on the same finger count and direction |
 | `test_git.sh` | The tree holds no gitlink without a matching `.gitmodules` entry, which would break `git submodule` and anything walking submodules |
 | `test_dots.sh` | Every installer metafile under `Scripts/dots` parses, declares the keys the installer needs, uses a known action, and declares a usable `source` where it has one. A local entry's `source_root` and its non-glob paths have to exist inside the checkout; an entry backed by a remote `source` is exempt from those checks, since its files come from an archive the installer downloads, but its path types are still checked. It also keeps Grimblast on the fixed official source |
+| `test_shaders.sh` | Shader consent, preview coalescing, cancellation and rollback; rejects unknown/empty names, invalid hooks and compositor values; sanitizes menu metadata and preserves state on file/IPC failures |
+| `test_rofi_pos.sh` | Cursor-follow menu fit and overflow on both axes, exact-fit and midpoint boundaries, oversized windows, margins, reserved areas, scaling, rotation and missing compositor data |
 | `test_lua_syntax.sh` | Every shipped Lua file parses |
 | `test_schema.sh` | Generated schema artifacts use the current Lua battery notification daemon rather than the removed shell implementation |
 | `test_screenshot_wrapper.sh` | Satty receives a compatible default GTK renderer while preserving explicit renderer overrides |
@@ -35,9 +37,17 @@ is adding a file.
 | Tool | Used by | Missing |
 | --- | --- | --- |
 | `lua`, `luac` | bind and Lua syntax checks | case is skipped |
+| Lua 5.3+ with `lfs`, `socket`, `argparse`, `dkjson` | shader behavior checks | missing modules fail the case |
 | `python3` 3.11+ | metafile check | case is skipped |
 | `shellcheck` | shell check | only the parse half runs |
 
 A skipped case is reported as such and does not fail the run, so the suite
 stays usable on a machine without the full toolchain. CI installs everything,
 so nothing is skipped there.
+
+The shader and rofi position regression cases target HyDE-Project/HyDE#2113.
+To test a separate HyDE checkout, run
+`REPO_ROOT=/path/to/HyDE sh /path/to/tests/run.sh`.
+On Debian/Ubuntu, the shader modules are provided by `lua-filesystem`,
+`lua-socket`, `lua-argparse`, and `lua-dkjson`; install them for the Lua
+interpreter used by the runner.
