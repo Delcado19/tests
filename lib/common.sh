@@ -11,18 +11,31 @@ export REPO_ROOT
 
 _failures=0
 
+# Colour only where it helps (an attached terminal, or CI's log viewer,
+# which renders ANSI); plain text otherwise so redirected/grepped output
+# stays exact.
+if [ -t 1 ] || [ -n "${CI:-}" ]; then
+    _c_red='\033[31m'
+    _c_yellow='\033[33m'
+    _c_reset='\033[0m'
+else
+    _c_red=''
+    _c_yellow=''
+    _c_reset=''
+fi
+
 fail() {
     _failures=$((_failures + 1))
-    printf '    fail: %s\n' "$1"
+    printf "    ${_c_red}fail: %s${_c_reset}\n" "$1"
 }
 
 skip() {
-    printf '    skip: %s\n' "$1"
+    printf "    ${_c_yellow}skip: %s${_c_reset}\n" "$1"
 }
 
 finish() {
     if [ "$_failures" -ne 0 ]; then
-        printf '    %d failure(s)\n' "$_failures"
+        printf "    ${_c_red}%d failure(s)${_c_reset}\n" "$_failures"
         exit 1
     fi
     exit 0

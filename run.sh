@@ -21,6 +21,19 @@ filter=${1:-}
 total=0
 failed=0
 
+# Colour only where it helps (an attached terminal, or CI's log viewer,
+# which renders ANSI); plain text otherwise so redirected/grepped output
+# stays exact.
+if [ -t 1 ] || [ -n "${CI:-}" ]; then
+    c_red='\033[31m'
+    c_green='\033[32m'
+    c_reset='\033[0m'
+else
+    c_red=''
+    c_green=''
+    c_reset=''
+fi
+
 for case_path in "$tests_dir"/test_*.sh; do
     [ -f "$case_path" ] || continue
 
@@ -46,9 +59,9 @@ for case_path in "$tests_dir"/test_*.sh; do
     fi
 
     if [ "$status" -eq 0 ]; then
-        printf '  ok\n'
+        printf "  ${c_green}ok${c_reset}\n"
     else
-        printf '  FAILED\n'
+        printf "  ${c_red}FAILED${c_reset}\n"
         failed=$((failed + 1))
     fi
 done
@@ -58,5 +71,9 @@ if [ "$total" -eq 0 ]; then
     exit 1
 fi
 
-printf '\n%d case(s), %d failed\n' "$total" "$failed"
+if [ "$failed" -eq 0 ]; then
+    printf '\n%d case(s), %d failed\n' "$total" "$failed"
+else
+    printf "\n%d case(s), ${c_red}%d failed${c_reset}\n" "$total" "$failed"
+fi
 [ "$failed" -eq 0 ]
