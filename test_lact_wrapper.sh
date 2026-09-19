@@ -10,6 +10,15 @@ if ! command -v lua >/dev/null 2>&1; then
     finish
 fi
 
+# lact.lua only exists on HyDE-Project/HyDE#2096, not yet merged to dev, so a
+# checkout of dev has no module for this spec to load (HyDE-Project/tests#5).
+# Same gap test_shader_default.sh already guards against for its own module.
+lact_module="$REPO_ROOT/Configs/.local/lib/hyde/lact.lua"
+[ -f "$lact_module" ] || {
+    skip "lact.lua is not in this checkout yet (HyDE-Project/HyDE#2096)"
+    finish
+}
+
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 
