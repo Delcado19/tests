@@ -214,6 +214,27 @@ run --this-flag-does-not-exist >/dev/null 2>&1
 status=$?
 [ "$status" -ne 0 ] || fail "an unrecognised flag exited 0"
 
+# --- an unset XDG_RUNTIME_DIR must fail clearly, not fall back to a shared,
+# predictable /tmp location another local user could pre-plant (CWE-377:
+# a symlink or pre-owned directory at that fixed path would let a different
+# user intercept or interfere with this user's state and inhibitor pid). ---
+fresh_home no-runtime-dir
+out=$(env -i \
+    HOME="$home_dir" \
+    XDG_CONFIG_HOME="$home_dir/.config" \
+    XDG_DATA_HOME="$home_dir/.local/share" \
+    XDG_CACHE_HOME="$home_dir/.cache" \
+    XDG_STATE_HOME="$home_dir/.local/state" \
+    PATH="$full_path" \
+    bash "$script" -rq 2>&1)
+status=$?
+[ "$status" -ne 0 ] || fail "an unset XDG_RUNTIME_DIR exited 0"
+case "$out" in
+*'XDG_RUNTIME_DIR is not set'*) ;;
+*) fail "an unset XDG_RUNTIME_DIR gave no explanation: $out" ;;
+esac
+[ -e "/tmp/hyde" ] && fail "an unset XDG_RUNTIME_DIR still created a shared /tmp/hyde fallback"
+
 # --- concurrent toggles: the lock keeps the state file and inhibitor
 # bookkeeping consistent instead of corrupting it ---
 fresh_home concurrent
