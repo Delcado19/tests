@@ -45,6 +45,11 @@ for helper in "wallpaper/cache.sh" "theme.switch.sh" "waybar.py"; do
         >"$home_dir/.local/lib/hyde/$helper"
     chmod +x "$home_dir/.local/lib/hyde/$helper"
 done
+# install.sh sources this from $HOME after deploy to initialize the HyDE
+# environment for the calls above -- a real deploy writes it via the "hyde"
+# dot (core.toml), but deez is stubbed out below and never touches disk, so
+# it has to be stood up here like the helpers above or the source fails.
+: >"$home_dir/.local/lib/hyde/globalcontrol.sh"
 
 deez_exe="$home_dir/.local/state/hyde/python_env/bin/deez"
 # The environment step syncs through the interpreter in that environment.
