@@ -59,13 +59,15 @@ A HyDE pull request's `Tests` workflow does not read the `tests` gitlink
 pointer to decide which checkout of this repo to test against. Instead it
 looks for a branch of the **same name** as the HyDE PR branch: first in
 HyDE-Project/tests, then (for a PR from a fork) in that fork's tests repo,
-falling back to `main` if neither exists.
+falling back to `main` if neither exists (by design, see kRHYME7's comment
+on #11).
 
 So a HyDE PR that depends on an unmerged fix here needs a branch in this
 repo with the identical name, pushed to the same account the HyDE PR is
-from — not just any branch containing the fix. A mismatched name fails
-silently: CI falls back to `main`, tests the HyDE change against
-whatever is already there, and any failure it reports may have nothing to
-do with the actual change (see HyDE-Project/HyDE#2122 and #2123, where two
-same-day PRs used differently-named tests branches and both showed
-unrelated CI failures from `main` lacking their fixes).
+from — not just any branch containing the fix. A mismatched name falls
+back to `main` without warning, testing the HyDE change against whatever
+is already there; any failure it reports may have nothing to do with the
+actual change (see HyDE-Project/HyDE#2122 and #2123, where two same-day
+PRs used differently-named tests branches and both showed unrelated CI
+failures from `main` lacking their fixes, until the branch names were
+made to match).
