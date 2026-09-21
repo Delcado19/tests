@@ -26,13 +26,51 @@ if GTK:
     temp_home = tempfile.TemporaryDirectory()
     os.environ.update(HOME=temp_home.name, XDG_CONFIG_HOME=temp_home.name + "/config",
                       XDG_DATA_HOME=temp_home.name + "/data", XDG_DATA_DIRS=temp_home.name + "/system:/usr/share",
-                      XDG_CURRENT_DESKTOP="Hyprland")
+                      XDG_CURRENT_DESKTOP="Hyprland",
+                      # xdg_path() falls back to a set XDG_STATE_HOME verbatim (never
+                      # to $HOME); an ambient real value here would make tests read
+                      # and write the real user's ~/.local/state/hyde/config (#found
+                      # via test_window_and_live_reload writing a real category).
+                      XDG_STATE_HOME=temp_home.name + "/state")
     s.APP_ID += ".Tests"
     s.load_gtk()
     assert s.Gtk.init_check()[0], "Xvfb display is unavailable"
 
 
 class Logic(unittest.TestCase):
+    def test_readable_foreground(self):
+        # Real Waybar theme values that prompted this (main-fg on main-bg,
+        # both translucent): 4.44:1 against a light desktop background,
+        # below the 4.5:1 body-text floor -- despite 7.15:1 against a dark one.
+        main_bg = (21 / 255, 10 / 255, 9 / 255, 0.8)
+        main_fg = (240 / 255, 176 / 255, 170 / 255, 0.8)
+        fixed = s.readable_foreground(main_fg, main_bg)
+        self.assertEqual(fixed[3], 1.0)
+        self.assertEqual(fixed[:3], main_fg[:3])
+        for backdrop in ((0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 1.0)):
+            bg_over = s._composite(main_bg, backdrop)
+            fg_over = s._composite(fixed, (*bg_over, 1.0))
+            self.assertGreaterEqual(s._contrast_ratio(fg_over, bg_over), 4.5)
+
+        # already-safe pair: untouched, not just "still passes"
+        safe_fg, safe_bg = (1.0, 1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 1.0)
+        self.assertEqual(s.readable_foreground(safe_fg, safe_bg), safe_fg)
+
+        # boundary: exactly opaque black-on-white must not be altered or crash
+        self.assertEqual(s.readable_foreground((0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 1.0)), (0.0, 0.0, 0.0, 1.0))
+
+        # degenerate: fully transparent background (alpha 0) must not divide by zero
+        result = s.readable_foreground((0.5, 0.5, 0.5, 0.5), (0.1, 0.1, 0.1, 0.0))
+        self.assertEqual(len(result), 4)
+
+        # known limit: even opaque, this theme's hover hues can't reach 4.5:1 --
+        # readable_foreground only removes alpha as a variable, it never invents
+        # a new hue (this app deliberately never overrides a theme's own colours).
+        hvr_fg, hvr_bg = (240 / 255, 176 / 255, 170 / 255, 0.8), (125 / 255, 80 / 255, 75 / 255, 0.4)
+        fixed_hvr = s.readable_foreground(hvr_fg, hvr_bg)
+        self.assertEqual(fixed_hvr[:3], hvr_fg[:3])
+        self.assertLess(s._contrast_ratio(fixed_hvr[:3], hvr_bg[:3]), 4.5)
+
     def test_search(self):
         display = s.ENTRIES[1]
         for query in ("", "  ", "MONITOR", "Ｂｉｌｄｓｃｈｉｒｍ", "display scaling", "\tmonitor\n"):
@@ -45,6 +83,7 @@ class Logic(unittest.TestCase):
 
     def test_catalog(self):
         self.assertEqual(len(s.ENTRIES), len({(e.category, e.title) for e in s.ENTRIES}))
+        shipped_desktop_dir = ROOT / "Configs/.local/share/applications"
         for entry in s.ENTRIES:
             self.assertIn(entry.category, s.CATEGORIES)
             self.assertTrue(entry.target)
@@ -52,6 +91,40 @@ class Logic(unittest.TestCase):
                 self.assertEqual(s.hyde_command(entry)[:6], ["hyde-shell", "app", "-t", "scope", "--", "hyde-shell"])
                 candidates = [ROOT / "Configs/.local/lib/hyde" / (entry.target[0] + ext) for ext in (".sh", ".lua", ".py")]
                 self.assertTrue(any(p.exists() for p in candidates), entry.target)
+            elif (shipped_desktop_dir / entry.target[0]).exists():
+                # HyDE ships this desktop file itself instead of relying on a
+                # system package's -- keep it in sync with its Entry target.
+                content = (shipped_desktop_dir / entry.target[0]).read_text()
+                self.assertIn("Type=Application", content)
+                self.assertRegex(content, r"(?m)^Exec=\S")
+
+    def test_default_apps_targets_a_standalone_tool(self):
+        # org.kde.keditfiletype.desktop's Exec=keditfiletype needs a mimetype
+        # argv it never gets from a bare launch -- it just prints --help and
+        # exits without opening anything. kcmshell6 filetypes is the actual
+        # standalone GUI, so the entry ships its own shim pointing at that.
+        entry = next(e for e in s.ENTRIES if e.title == "Default apps")
+        self.assertEqual(entry.target, ("hyde-default-apps.desktop",))
+        path = ROOT / "Configs/.local/share/applications" / entry.target[0]
+        self.assertIn("Exec=hyde-shell app -t scope -- kcmshell6 filetypes", path.read_text())
+
+    def test_font_manager_desktop_id(self):
+        # font-manager ships its .desktop under a reverse-DNS id; the plain
+        # "font-manager.desktop" name resolves to nothing on any system.
+        entry = next(e for e in s.ENTRIES if e.title == "Font manager")
+        self.assertEqual(entry.target, ("com.github.FontManager.FontManager.desktop",))
+
+    def test_firewall_targets_a_wayland_safe_tool(self):
+        # gufw's Exec=gufw re-execs its whole GTK GUI as root via pkexec,
+        # which loses WAYLAND_DISPLAY/XAUTHORITY and never opens a window on
+        # Wayland/XWayland, even after a successful polkit auth. plasma-
+        # firewall's KCM authorizes individual ufw actions via KAuth/Polkit
+        # instead, so the entry ships its own shim pointing at that.
+        entry = next(e for e in s.ENTRIES if e.title == "Firewall")
+        self.assertEqual(entry.target, ("hyde-firewall.desktop",))
+        path = ROOT / "Configs/.local/share/applications" / entry.target[0]
+        self.assertIn("Exec=hyde-shell app -t scope -- kcmshell6 firewall", path.read_text())
+        self.assertEqual(s.PACKAGES["Firewall"], "plasma-firewall")
 
     def test_xdg(self):
         for value in ("", "relative/path"):
@@ -91,6 +164,64 @@ class Logic(unittest.TestCase):
         self.assertNotIn("Serial", s.information_text(info))
         self.assertEqual(s.size_text(-1), s.UNAVAILABLE)
         self.assertEqual(s.size_text(0), "0.0 GiB")
+
+    def test_account_overview(self):
+        def record(name="alice", gecos="Alice Example,,,", uid=1000, gid=100, home="/home/alice", shell="/bin/bash"):
+            return type("Record", (), {"pw_name": name, "pw_gecos": gecos, "pw_uid": uid, "pw_gid": gid, "pw_dir": home, "pw_shell": shell})()
+
+        def group(name, members):
+            return type("Group", (), {"gr_name": name, "gr_mem": members})()
+
+        with patch.object(s.pwd, "getpwuid", return_value=record()), \
+             patch.object(s.grp, "getgrgid", return_value=group("users", [])), \
+             patch.object(s.grp, "getgrall", return_value=[group("wheel", ["alice"]), group("users", [])]):
+            rows = dict(s.account_overview())
+        self.assertEqual(rows["Username"], "alice")
+        self.assertEqual(rows["Full name"], "Alice Example")
+        self.assertEqual(rows["Groups"], "users, wheel")
+
+        # missing: UID has no passwd entry (e.g. a container/sandbox with a bare UID)
+        with patch.object(s.pwd, "getpwuid", side_effect=KeyError()):
+            self.assertEqual(s.account_overview(), [])
+
+        # malformed: empty gecos field falls back to the username
+        with patch.object(s.pwd, "getpwuid", return_value=record(gecos="")), \
+             patch.object(s.grp, "getgrgid", return_value=group("users", [])), \
+             patch.object(s.grp, "getgrall", return_value=[]):
+            rows = dict(s.account_overview())
+        self.assertEqual(rows["Full name"], "alice")
+
+        # boundary: primary group id does not resolve (stale/broken NSS)
+        with patch.object(s.pwd, "getpwuid", return_value=record(gid=31337)), \
+             patch.object(s.grp, "getgrgid", side_effect=KeyError()), \
+             patch.object(s.grp, "getgrall", return_value=[]):
+            rows = dict(s.account_overview())
+        self.assertEqual(rows["Primary group"], "31337")
+        self.assertEqual(rows["Groups"], "31337")
+
+        # boundary: no supplementary groups at all still lists the primary group
+        with patch.object(s.pwd, "getpwuid", return_value=record()), \
+             patch.object(s.grp, "getgrgid", return_value=group("users", [])), \
+             patch.object(s.grp, "getgrall", return_value=[]):
+            rows = dict(s.account_overview())
+        self.assertEqual(rows["Groups"], "users")
+
+    def test_set_hostname(self):
+        with patch.object(s.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+            self.assertEqual(s.set_hostname("laptop"), (True, ""))
+        with patch.object(s.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "Failed to set hostname: Invalid hostname 'a b'")):
+            ok, detail = s.set_hostname("a b")
+            self.assertFalse(ok)
+            self.assertIn("Invalid hostname", detail)
+        for error in (FileNotFoundError(2, "No such file or directory"), subprocess.TimeoutExpired("hostnamectl", 120)):
+            with self.subTest(error=error), patch.object(s.subprocess, "run", side_effect=error):
+                ok, detail = s.set_hostname("x")
+                self.assertFalse(ok)
+                self.assertTrue(detail)
+        # boundary: empty name -- hostnamectl itself rejects it, we just relay that
+        with patch.object(s.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "Failed to set hostname: Invalid hostname ''")):
+            ok, detail = s.set_hostname("")
+            self.assertFalse(ok)
 
     def test_unreadable_and_oversized_data(self):
         with patch.object(Path, "open", side_effect=PermissionError()):
@@ -145,7 +276,10 @@ class GtkBehaviour(unittest.TestCase):
 
     def test_imports_and_symbolic_colors(self):
         (self.path.parent / "palette.css").write_text(self.good)
-        self.path.write_text('@import "palette.css";\n@define-color main-fg alpha(@wb-act-fg, 0.8);')
+        # wb-act-fg is overridden to white first: main-fg (same hue as main-bg in
+        # `self.good`) would otherwise get its alpha rounded up to 1.0 by the
+        # contrast safety net, which would swallow the "0.8" this test checks for.
+        self.path.write_text('@import "palette.css";\n@define-color wb-act-fg #ffffff;\n@define-color main-fg alpha(@wb-act-fg, 0.8);')
         provider = s.palette_provider(self.path)
         self.assertIn("0.8", provider.to_string())
         (self.path.parent / "palette.css").unlink()
@@ -171,12 +305,47 @@ class GtkBehaviour(unittest.TestCase):
             self.fail("Desktop cache did not converge after a filesystem change")
         path.write_text('[Desktop Entry]\nType=Application\nName=Test Tool\nExec=/bin/true "two words"\n')
         self.assertEqual(resolved(True).get_display_name(), "Test Tool")
+        # NoDisplay/OnlyShowIn gate a generic desktop menu, not whether a tool
+        # this hub deliberately picked cross-desktop can be launched (#xfce4-power-manager
+        # silently reporting "not installed" despite OnlyShowIn=XFCE on Hyprland).
+        path.write_text('[Desktop Entry]\nType=Application\nName=Test Tool\nExec=/bin/true\nNoDisplay=true\n')
+        self.assertEqual(resolved(True).get_display_name(), "Test Tool")
+        path.write_text('[Desktop Entry]\nType=Application\nName=Test Tool\nExec=/bin/true\nOnlyShowIn=SomeOtherDesktop;\n')
+        self.assertEqual(resolved(True).get_display_name(), "Test Tool")
         path.write_text('[Desktop Entry]\nType=Application\nName=Test Tool\nExec=/bin/true\nHidden=true\n')
         self.assertIsNone(resolved(False))
         path.write_text('[Desktop Entry]\nType=Application\nName=Test Tool\nExec=/bin/true\nTryExec=/does/not/exist\n')
         self.assertIsNone(s.desktop_info(entry))
         path.write_text('not a desktop entry')
         self.assertIsNone(s.desktop_info(entry))
+
+    def test_entry_detail_ignores_session_locale(self):
+        # get_display_name() honours the session locale (e.g. LANG=de_DE
+        # returning a desktop file's Name[de]), which would leak non-English
+        # text into this hub's otherwise all-English detail line.
+        apps = Path(os.environ["XDG_DATA_HOME"]) / "applications"
+        apps.mkdir(parents=True, exist_ok=True)
+        path = apps / "hyde-locale-test.desktop"
+        path.write_text('[Desktop Entry]\nType=Application\nName=Right Name\nExec=/bin/true\n')
+        entry = s.Entry("Test", "Locale Test", "Test", "computer-symbolic", (path.name,))
+        deadline = time.monotonic() + 2
+        app = None
+        while time.monotonic() < deadline:
+            while s.GLib.MainContext.default().iteration(False):
+                pass
+            app = s.desktop_info(entry)
+            if app:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(app)
+        gtk_app = s.create_application()
+        gtk_app.content = s.Gtk.Box()
+        with patch.object(type(app), "get_display_name", return_value="Wrong Localized Name"):
+            gtk_app.add_entry(entry)
+        button = gtk_app.content.get_children()[0].get_children()[0]
+        accessible_name = button.get_accessible().get_name()
+        self.assertIn("Opens Right Name", accessible_name)
+        self.assertNotIn("Wrong Localized Name", accessible_name)
 
     def test_launch_failures(self):
         app = s.create_application()
@@ -201,6 +370,31 @@ class GtkBehaviour(unittest.TestCase):
         with patch.object(s.Gtk.CssProvider, "load_from_path", side_effect=s.GLib.Error("Permission denied")):
             with self.assertRaises(s.GLib.Error):
                 s.palette_provider(self.path)
+
+    def test_last_category_restored_on_cold_start(self):
+        # A saved category is honoured...
+        with patch.object(s, "read_user_conf", return_value="Displays"):
+            app = s.create_application()
+        self.assertEqual(app.category, "Displays")
+        # ...but a stale/unknown one (renamed/removed category) falls back safely
+        # instead of crashing on nav.get_row_at_index() during do_activate().
+        with patch.object(s, "read_user_conf", return_value="Not A Real Category"):
+            app = s.create_application()
+        self.assertEqual(app.category, s.CATEGORIES[0])
+        written = {}
+        with patch.object(s, "read_user_conf", return_value=""), \
+             patch.object(s, "write_user_conf", side_effect=written.__setitem__):
+            app = s.create_application()
+            app.theme_path = self.path
+            # do_activate() only, not register()+activate(): this test doesn't need
+            # real D-Bus registration, and a second GApplication on the session bus
+            # in the same process broke test_window_and_live_reload's own register().
+            app.do_activate()
+            try:
+                app.nav.select_row(app.nav.get_row_at_index(1))
+            finally:
+                app.window.destroy()
+        self.assertEqual(written.get("HYDE_SETTINGS_LAST_CATEGORY"), "Displays")
 
     def test_window_and_live_reload(self):
         app = s.create_application()
