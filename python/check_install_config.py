@@ -32,7 +32,7 @@ def undent(body: str) -> str:
 
 def expand(body: str) -> str:
     """Resolve the one variable the generated configs interpolate."""
-    return body.replace("${scrDir}", str((REPO_ROOT / "Scripts").resolve()))
+    return body.replace("${installDir}", str((REPO_ROOT / "Scripts").resolve()))
 
 
 def parse(body: str) -> dict:
