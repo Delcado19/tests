@@ -155,6 +155,42 @@ class Logic(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/a b"}):
             self.assertEqual(s.xdg_path("XDG_CONFIG_HOME", ".config"), Path("/tmp/a b"))
 
+    def test_atomic_write_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sub" / "target"
+
+            # missing parent dir: created, first write has no prior mode to preserve
+            s.atomic_write_text(path, "first\n")
+            self.assertEqual(path.read_text(), "first\n")
+
+            # existing file's permissions survive a replace
+            path.chmod(0o640)
+            mode_before = path.stat().st_mode
+            s.atomic_write_text(path, "second\n")
+            self.assertEqual(path.read_text(), "second\n")
+            self.assertEqual(path.stat().st_mode, mode_before)
+
+            # no leftover temp files after a successful write
+            leftovers = [p for p in path.parent.iterdir() if p != path]
+            self.assertEqual(leftovers, [])
+
+            # a write that can't create its parent (blocked by a plain file
+            # where a directory needs to go) raises instead of silently
+            # losing the update
+            blocked = Path(tmp) / "not-a-dir"
+            blocked.write_text("")
+            with self.assertRaises(OSError):
+                s.atomic_write_text(blocked / "target", "x")
+
+            # a failure after the temp file is written (here: os.replace onto
+            # an existing directory) still cleans the temp file up
+            target_dir = Path(tmp) / "is-a-dir"
+            target_dir.mkdir()
+            with self.assertRaises(OSError):
+                s.atomic_write_text(target_dir, "x")
+            leftovers = list(Path(tmp).glob(".is-a-dir.*"))
+            self.assertEqual(leftovers, [], f"temp file(s) left behind: {leftovers}")
+
     def test_user_state_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"XDG_STATE_HOME": tmp}):
             # missing input
@@ -702,6 +738,87 @@ class GtkBehaviour(unittest.TestCase):
         if "error" in ctx:
             raise ctx["error"]
         self.assertIn(["pkill", "-RTMIN+10", "waybar"], commands)
+
+    def test_weather_location_reports_save_failure(self):
+        # The bug this guards: row_activated() ignored write_weather_location()'s
+        # success/failure entirely, so a failed save (full disk, unwritable
+        # config dir) still saved the display label, refreshed Waybar, and
+        # closed the dialog with Gtk.ResponseType.OK -- as if the location had
+        # actually changed.
+        app = s.create_application()
+        app.theme_path = self.path
+        app.do_activate()
+        ctx = {}
+        commands = []
+
+        def fake_geocode(query):
+            if query == "Test":
+                return [{"latitude": 1.0, "longitude": 2.0, "name": "Testville", "country": "Testland"}]
+            return []
+
+        def fake_command_output(argv):
+            commands.append(argv)
+            return ""
+
+        def find_descendant(widget, gtype):
+            if isinstance(widget, gtype):
+                return widget
+            for child in getattr(widget, "get_children", lambda: [])():
+                found = find_descendant(child, gtype)
+                if found:
+                    return found
+            return None
+
+        def fail(exc):
+            ctx["error"] = exc
+            if ctx.get("dialog"):
+                ctx["dialog"].response(s.Gtk.ResponseType.CANCEL)
+
+        def find_dialog():
+            try:
+                dialog = next(w for w in s.Gtk.Window.list_toplevels()
+                              if isinstance(w, s.Gtk.Dialog) and w.get_title() == "Weather location")
+                area = dialog.get_content_area()
+                search = find_descendant(area, s.Gtk.SearchEntry)
+                status = find_descendant(area, s.Gtk.Label)
+                results = find_descendant(area, s.Gtk.ListBox)
+                ctx.update(dialog=dialog, search=search, status=status, results=results)
+                s.GLib.timeout_add(5000, lambda: (dialog.response(s.Gtk.ResponseType.CANCEL), False)[1])
+                search.set_text("Test")
+                s.GLib.timeout_add(20, wait_for_row)
+            except Exception as exc:
+                fail(exc)
+            return False
+
+        def wait_for_row():
+            row = ctx["results"].get_row_at_index(0)
+            if row is None:
+                return True  # keep polling; the 5s safety net bounds this
+            try:
+                # Emission is synchronous, so row_activated() has already run
+                # to completion by the time emit() returns below -- checking
+                # here avoids racing the dialog's own teardown if it responds.
+                ctx["results"].emit("row-activated", row)
+                self.assertEqual(commands, [], "Waybar was signalled despite the save failing")
+                self.assertIn("Could not save", ctx["status"].get_text())
+            except Exception as exc:
+                ctx["error"] = exc
+            finally:
+                ctx["dialog"].response(s.Gtk.ResponseType.CANCEL)
+            return False
+
+        s.GLib.idle_add(find_dialog)
+        try:
+            with patch.object(s, "geocode_search", side_effect=fake_geocode), \
+                 patch.object(s, "write_weather_location", return_value=False), \
+                 patch.object(s, "write_user_state") as mock_write_state, \
+                 patch.object(s, "command_output", side_effect=fake_command_output):
+                app.open_weather_location()
+        finally:
+            app.window.destroy()
+        if "error" in ctx:
+            raise ctx["error"]
+        mock_write_state.assert_not_called()
 
     def test_window_and_live_reload(self):
         app = s.create_application()
