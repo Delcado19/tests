@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 import warnings
 
@@ -84,6 +85,12 @@ class Logic(unittest.TestCase):
     def test_catalog(self):
         self.assertEqual(len(s.ENTRIES), len({(e.category, e.title) for e in s.ENTRIES}))
         shipped_desktop_dir = ROOT / "Configs/.local/share/applications"
+        with (ROOT / "Scripts/dots/hyde.toml").open("rb") as f:
+            dots = tomllib.load(f)
+        deployed_paths = set()
+        for block in dots.get("hyde", {}).get("files", []):
+            paths = block.get("paths", [])
+            deployed_paths.update([paths] if isinstance(paths, str) else paths)
         for entry in s.ENTRIES:
             self.assertIn(entry.category, s.CATEGORIES)
             self.assertTrue(entry.target)
@@ -97,6 +104,10 @@ class Logic(unittest.TestCase):
                 content = (shipped_desktop_dir / entry.target[0]).read_text()
                 self.assertIn("Type=Application", content)
                 self.assertRegex(content, r"(?m)^Exec=\S")
+                # Shipping the file in the repo isn't enough -- the installer
+                # has to actually deploy it, or it never reaches a real install.
+                self.assertIn(f"applications/{entry.target[0]}", deployed_paths,
+                              f"{entry.target[0]} is shipped but not deployed by Scripts/dots/hyde.toml")
 
     def test_default_apps_targets_a_standalone_tool(self):
         # org.kde.keditfiletype.desktop's Exec=keditfiletype needs a mimetype
@@ -106,7 +117,12 @@ class Logic(unittest.TestCase):
         entry = next(e for e in s.ENTRIES if e.title == "Default apps")
         self.assertEqual(entry.target, ("hyde-default-apps.desktop",))
         path = ROOT / "Configs/.local/share/applications" / entry.target[0]
-        self.assertIn("Exec=hyde-shell app -t scope -- kcmshell6 filetypes", path.read_text())
+        content = path.read_text()
+        self.assertIn("Exec=hyde-shell app -t scope -- kcmshell6 filetypes", content)
+        # Without TryExec, GIO only checks that hyde-shell (the outer command)
+        # resolves -- kcmshell6 itself (kde-cli-tools) could be missing and
+        # this entry would still show as available, then silently do nothing.
+        self.assertIn("TryExec=kcmshell6", content)
 
     def test_font_manager_desktop_id(self):
         # font-manager ships its .desktop under a reverse-DNS id; the plain
@@ -123,7 +139,12 @@ class Logic(unittest.TestCase):
         entry = next(e for e in s.ENTRIES if e.title == "Firewall")
         self.assertEqual(entry.target, ("hyde-firewall.desktop",))
         path = ROOT / "Configs/.local/share/applications" / entry.target[0]
-        self.assertIn("Exec=hyde-shell app -t scope -- kcmshell6 firewall", path.read_text())
+        content = path.read_text()
+        self.assertIn("Exec=hyde-shell app -t scope -- kcmshell6 firewall", content)
+        # Without TryExec, GIO only checks that hyde-shell (the outer command)
+        # resolves -- kcmshell6 itself (kde-cli-tools) could be missing and
+        # this entry would still show as available, then silently do nothing.
+        self.assertIn("TryExec=kcmshell6", content)
         self.assertEqual(s.PACKAGES["Firewall"], "plasma-firewall")
 
     def test_xdg(self):
