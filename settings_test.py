@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import unittest
@@ -538,6 +539,99 @@ class GtkBehaviour(unittest.TestCase):
                 self.assertEqual(headings[0].get_text(), s.CATEGORIES[target_index])
             finally:
                 app.window.destroy()
+
+    def test_weather_search_clearing_invalidates_stale_results(self):
+        # The bug this guards: state["generation"] was only bumped when a
+        # debounced search actually fired, so clearing the query while an
+        # earlier search was still in flight left it holding the current
+        # generation number. Its result would then arrive *after* the field
+        # was cleared and pass show_results()'s staleness check, silently
+        # repopulating the "cleared" list with the old query's rows.
+        app = s.create_application()
+        app.theme_path = self.path
+        app.do_activate()
+        # Deterministic handoffs instead of guessed delays: GtkSearchEntry
+        # has its own internal debounce before "search-changed" even fires,
+        # on top of this dialog's 400ms one, so a fixed sleep before clearing
+        # the query can't reliably land after the background thread starts.
+        search_started = threading.Event()
+        release_slow_search = threading.Event()
+        ctx = {}
+
+        def fake_geocode(query):
+            if query == "Berl":
+                search_started.set()
+                release_slow_search.wait(2)
+                return [{"latitude": 52.5, "longitude": 13.4, "name": "Berlin", "country": "Germany"}]
+            return []
+
+        def fail(exc):
+            ctx["error"] = exc
+            if ctx.get("dialog"):
+                ctx["dialog"].response(s.Gtk.ResponseType.CANCEL)
+
+        def find_descendant(widget, gtype):
+            # ScrolledWindow wraps a non-Scrollable child (Gtk.ListBox) in an
+            # implicit Gtk.Viewport, so a fixed child-index path is fragile;
+            # search the tree instead.
+            if isinstance(widget, gtype):
+                return widget
+            for child in getattr(widget, "get_children", lambda: [])():
+                found = find_descendant(child, gtype)
+                if found:
+                    return found
+            return None
+
+        def find_dialog():
+            try:
+                dialog = next(w for w in s.Gtk.Window.list_toplevels()
+                              if isinstance(w, s.Gtk.Dialog) and w.get_title() == "Weather location")
+                area = dialog.get_content_area()
+                search = find_descendant(area, s.Gtk.SearchEntry)
+                status = find_descendant(area, s.Gtk.Label)
+                results = find_descendant(area, s.Gtk.ListBox)
+                ctx.update(dialog=dialog, search=search, status=status, results=results)
+                # Safety net: never leave dialog.run() blocking the test forever.
+                s.GLib.timeout_add(5000, lambda: (dialog.response(s.Gtk.ResponseType.CANCEL), False)[1])
+                ctx["search"].set_text("Berl")
+                s.GLib.timeout_add(20, wait_for_search_start)
+            except Exception as exc:  # dialog/widget lookup itself failed
+                fail(exc)
+            return False
+
+        def wait_for_search_start():
+            if not search_started.is_set():
+                return True  # keep polling; the 5s safety net bounds this
+            try:
+                ctx["search"].set_text("")  # clear while "Berl"'s search is still in flight
+                s.GLib.timeout_add(100, release_and_wait)
+            except Exception as exc:
+                fail(exc)
+            return False
+
+        def release_and_wait():
+            release_slow_search.set()
+            s.GLib.timeout_add(250, check_and_close)
+            return False
+
+        def check_and_close():
+            try:
+                self.assertEqual(ctx["results"].get_children(), [])
+                self.assertEqual(ctx["status"].get_text(), "Type at least 2 characters.")
+            except Exception as exc:
+                ctx["error"] = exc
+            finally:
+                ctx["dialog"].response(s.Gtk.ResponseType.CANCEL)
+            return False
+
+        s.GLib.idle_add(find_dialog)
+        try:
+            with patch.object(s, "geocode_search", side_effect=fake_geocode):
+                app.open_weather_location()
+        finally:
+            app.window.destroy()
+        if "error" in ctx:
+            raise ctx["error"]
 
     def test_window_and_live_reload(self):
         app = s.create_application()
