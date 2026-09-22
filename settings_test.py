@@ -633,6 +633,76 @@ class GtkBehaviour(unittest.TestCase):
         if "error" in ctx:
             raise ctx["error"]
 
+    def test_weather_location_refreshes_waybar_on_selection(self):
+        # The bug this guards: selecting a location saved the new
+        # coordinates but never told Waybar to refresh, so custom-weather.jsonc
+        # (polls every 3600s, listens on signal 10) kept showing the previous
+        # location for up to an hour.
+        app = s.create_application()
+        app.theme_path = self.path
+        app.do_activate()
+        ctx = {}
+        commands = []
+
+        def fake_geocode(query):
+            if query == "Test":
+                return [{"latitude": 1.0, "longitude": 2.0, "name": "Testville", "country": "Testland"}]
+            return []
+
+        def fake_command_output(argv):
+            commands.append(argv)
+            return ""
+
+        def find_descendant(widget, gtype):
+            if isinstance(widget, gtype):
+                return widget
+            for child in getattr(widget, "get_children", lambda: [])():
+                found = find_descendant(child, gtype)
+                if found:
+                    return found
+            return None
+
+        def fail(exc):
+            ctx["error"] = exc
+            if ctx.get("dialog"):
+                ctx["dialog"].response(s.Gtk.ResponseType.CANCEL)
+
+        def find_dialog():
+            try:
+                dialog = next(w for w in s.Gtk.Window.list_toplevels()
+                              if isinstance(w, s.Gtk.Dialog) and w.get_title() == "Weather location")
+                area = dialog.get_content_area()
+                search = find_descendant(area, s.Gtk.SearchEntry)
+                results = find_descendant(area, s.Gtk.ListBox)
+                ctx.update(dialog=dialog, search=search, results=results)
+                s.GLib.timeout_add(5000, lambda: (dialog.response(s.Gtk.ResponseType.CANCEL), False)[1])
+                search.set_text("Test")
+                s.GLib.timeout_add(20, wait_for_row)
+            except Exception as exc:
+                fail(exc)
+            return False
+
+        def wait_for_row():
+            row = ctx["results"].get_row_at_index(0)
+            if row is None:
+                return True  # keep polling; the 5s safety net bounds this
+            try:
+                ctx["results"].emit("row-activated", row)
+            except Exception as exc:
+                fail(exc)
+            return False
+
+        s.GLib.idle_add(find_dialog)
+        try:
+            with patch.object(s, "geocode_search", side_effect=fake_geocode), \
+                 patch.object(s, "command_output", side_effect=fake_command_output):
+                app.open_weather_location()
+        finally:
+            app.window.destroy()
+        if "error" in ctx:
+            raise ctx["error"]
+        self.assertIn(["pkill", "-RTMIN+10", "waybar"], commands)
+
     def test_window_and_live_reload(self):
         app = s.create_application()
         app.theme_path = self.path
