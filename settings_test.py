@@ -514,6 +514,31 @@ class GtkBehaviour(unittest.TestCase):
                 app.window.destroy()
         self.assertEqual(written.get("HYDE_SETTINGS_LAST_CATEGORY"), "Displays")
 
+    def test_category_switch_survives_unwritable_state(self):
+        # The bug this guards: write_user_state() used to raise straight out
+        # of category_changed() on a full disk/unwritable state dir, which
+        # ran between updating self.category and calling render() -- so the
+        # sidebar selection changed but the content pane never caught up
+        # (stayed on the old category, or blank on first activation).
+        app = s.create_application()
+        app.theme_path = self.path
+        # A genuinely unwritable state path (not a mocked stand-in for one):
+        # staterc's parent directory already exists as a plain file, so
+        # mkdir(parents=True) raises a real OSError.
+        blocked_state_home = Path(tempfile.mkdtemp())
+        (blocked_state_home / "hyde").write_text("not a directory")
+        with patch.dict(os.environ, {"XDG_STATE_HOME": str(blocked_state_home)}):
+            app.do_activate()
+            try:
+                target_index = next(i for i, c in enumerate(s.CATEGORIES) if c != app.category)
+                app.nav.select_row(app.nav.get_row_at_index(target_index))
+                self.assertEqual(app.category, s.CATEGORIES[target_index])
+                headings = [c for c in app.content.get_children() if "heading" in c.get_style_context().list_classes()]
+                self.assertTrue(headings, "render() did not run after the persistence failure")
+                self.assertEqual(headings[0].get_text(), s.CATEGORIES[target_index])
+            finally:
+                app.window.destroy()
+
     def test_window_and_live_reload(self):
         app = s.create_application()
         app.theme_path = self.path
