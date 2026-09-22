@@ -133,13 +133,13 @@ class Logic(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/a b"}):
             self.assertEqual(s.xdg_path("XDG_CONFIG_HOME", ".config"), Path("/tmp/a b"))
 
-    def test_user_conf_round_trip(self):
+    def test_user_state_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"XDG_STATE_HOME": tmp}):
             # missing input
-            self.assertEqual(s.read_user_conf("NOPE"), "")
+            self.assertEqual(s.read_user_state("NOPE"), "")
 
-            s.write_user_conf("PLAIN", "Bielefeld")
-            self.assertEqual(s.read_user_conf("PLAIN"), "Bielefeld")
+            s.write_user_state("PLAIN", "Bielefeld")
+            self.assertEqual(s.read_user_state("PLAIN"), "Bielefeld")
 
             # malformed/out-of-spec values a geocoding API could plausibly send:
             # quotes, an apostrophe, backticks, a command substitution, a
@@ -153,30 +153,82 @@ class Logic(unittest.TestCase):
                 "`id`",
                 "back\\slash",
             ):
-                s.write_user_conf("PLACE", value)
-                self.assertEqual(s.read_user_conf("PLACE"), value)
+                s.write_user_state("PLACE", value)
+                self.assertEqual(s.read_user_state("PLACE"), value)
 
                 result = subprocess.run(
-                    ["bash", "-c", f'source "{s.user_conf_path()}" && printf %s "$PLACE"'],
+                    ["bash", "-c", f'source "{s.user_state_path()}" && printf %s "$PLACE"'],
                     capture_output=True, text=True, timeout=3, check=True,
                 )
                 self.assertEqual(result.stdout, value)
             self.assertFalse(Path("/tmp/hyde-settings-test-pwned").exists())
 
             # boundary: empty string
-            s.write_user_conf("EMPTY", "")
-            self.assertEqual(s.read_user_conf("EMPTY"), "")
+            s.write_user_state("EMPTY", "")
+            self.assertEqual(s.read_user_state("EMPTY"), "")
 
             # a newline can't survive the line-based reader; collapsed, not corrupted
-            s.write_user_conf("MULTILINE", "line one\nline two")
-            self.assertEqual(s.read_user_conf("MULTILINE"), "line one line two")
+            s.write_user_state("MULTILINE", "line one\nline two")
+            self.assertEqual(s.read_user_state("MULTILINE"), "line one line two")
 
             # overwrite replaces, doesn't duplicate, and leaves sibling keys alone
-            s.write_user_conf("PLAIN", "Rewritten")
-            self.assertEqual(s.read_user_conf("PLAIN"), "Rewritten")
-            contents = s.user_conf_path().read_text()
-            self.assertEqual(contents.count("export PLAIN="), 1)
-            self.assertEqual(s.read_user_conf("EMPTY"), "")
+            s.write_user_state("PLAIN", "Rewritten")
+            self.assertEqual(s.read_user_state("PLAIN"), "Rewritten")
+            contents = s.user_state_path().read_text()
+            self.assertEqual(contents.count("PLAIN="), 1)
+            self.assertEqual(s.read_user_state("EMPTY"), "")
+
+    def test_user_state_survives_config_regeneration(self):
+        # The bug this guards: settings.py used to persist into
+        # $XDG_STATE_HOME/hyde/config, the exact file config.lua fully
+        # rewrites from config.toml on every change/restart -- silently
+        # dropping the saved category and weather location. staterc is
+        # never touched by that regeneration.
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"XDG_STATE_HOME": tmp}):
+            s.write_user_state("HYDE_SETTINGS_LAST_CATEGORY", "Displays")
+            generated_config = Path(tmp) / "hyde/config"
+            generated_config.parent.mkdir(parents=True, exist_ok=True)
+            generated_config.write_text("export SOME_OTHER_VAR=1\n")  # config.lua's full rewrite
+            self.assertEqual(s.read_user_state("HYDE_SETTINGS_LAST_CATEGORY"), "Displays")
+            self.assertNotEqual(s.user_state_path(), generated_config)
+
+    def test_weather_location_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}):
+            # missing file entirely
+            self.assertEqual(s.read_weather_location(), "")
+
+            # no [weather] section yet -- must create one, not crash
+            (Path(tmp) / "hyde").mkdir(parents=True)
+            config_path = s.config_toml_path()
+            config_path.write_text('"$schema" = "https://example/schema.json"\n\n[desktop.app]\nbrowser = "brave"\n')
+            s.write_weather_location("52.0302,8.5325")
+            self.assertEqual(s.read_weather_location(), "52.0302,8.5325")
+            # sibling section untouched
+            self.assertIn('browser = "brave"', config_path.read_text())
+
+            # existing key gets replaced in place, not duplicated
+            s.write_weather_location("1.0,2.0")
+            self.assertEqual(s.read_weather_location(), "1.0,2.0")
+            self.assertEqual(config_path.read_text().count("location ="), 1)
+
+            # a section AFTER [weather] must survive the in-place edit
+            config_path.write_text(config_path.read_text() + "\n[gaming]\nfoo = 1\n")
+            s.write_weather_location("3.0,4.0")
+            self.assertEqual(s.read_weather_location(), "3.0,4.0")
+            self.assertIn("[gaming]", config_path.read_text())
+            self.assertIn("foo = 1", config_path.read_text())
+
+            # boundary/malformed: quote and backslash in the value round-trip
+            s.write_weather_location('weird",$(echo hi)')
+            self.assertEqual(s.read_weather_location(), 'weird",$(echo hi)')
+            # and never as live, unescaped TOML/shell content
+            self.assertNotIn('weird",$(echo hi)"', config_path.read_text())
+
+            # unreadable/empty config.toml: fail soft, don't crash
+            config_path.write_text("")
+            self.assertEqual(s.read_weather_location(), "")
+            s.write_weather_location("5.0,6.0")
+            self.assertEqual(s.read_weather_location(), "5.0,6.0")
 
     def test_failed_probes(self):
         for error in (FileNotFoundError(), PermissionError(), subprocess.TimeoutExpired("probe", 3), UnicodeError()):
@@ -418,17 +470,17 @@ class GtkBehaviour(unittest.TestCase):
 
     def test_last_category_restored_on_cold_start(self):
         # A saved category is honoured...
-        with patch.object(s, "read_user_conf", return_value="Displays"):
+        with patch.object(s, "read_user_state", return_value="Displays"):
             app = s.create_application()
         self.assertEqual(app.category, "Displays")
         # ...but a stale/unknown one (renamed/removed category) falls back safely
         # instead of crashing on nav.get_row_at_index() during do_activate().
-        with patch.object(s, "read_user_conf", return_value="Not A Real Category"):
+        with patch.object(s, "read_user_state", return_value="Not A Real Category"):
             app = s.create_application()
         self.assertEqual(app.category, s.CATEGORIES[0])
         written = {}
-        with patch.object(s, "read_user_conf", return_value=""), \
-             patch.object(s, "write_user_conf", side_effect=written.__setitem__):
+        with patch.object(s, "read_user_state", return_value=""), \
+             patch.object(s, "write_user_state", side_effect=written.__setitem__):
             app = s.create_application()
             app.theme_path = self.path
             # do_activate() only, not register()+activate(): this test doesn't need
