@@ -52,10 +52,3 @@ To test a separate HyDE checkout, run
 On Debian/Ubuntu, the shader modules are provided by `lua-filesystem`,
 `lua-socket`, `lua-argparse`, and `lua-dkjson`; install them for the Lua
 interpreter used by the runner.
-
-## HyDE Settings
-
-`sh tests/run.sh settings` runs search, CLI, probe and catalogue checks followed by
-GTK integration checks under Xvfb. Install distribution PyGObject, GTK 3, Xvfb and
-xauth for the graphical checks. CI requires them. See the
-[manual](../docs/hyde-settings.md) and [acceptance matrix](../docs/hyde-settings-tests.md).
