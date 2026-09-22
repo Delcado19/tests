@@ -83,6 +83,36 @@ class Logic(unittest.TestCase):
                 self.assertFalse(s.matches(display, query))
         self.assertTrue(s.matches(s.ENTRIES[0], "lautstärke"))
 
+    def test_parse_coordinates(self):
+        for query, expected in (
+            ("52.0302,8.5325", (52.0302, 8.5325)),
+            (" 52.03 , 8.53 ", (52.03, 8.53)),
+            ("-33.86,151.21", (-33.86, 151.21)),
+            ("90,180", (90.0, 180.0)),  # boundary: exactly at the valid range's edge
+            ("-90,-180", (-90.0, -180.0)),
+            ("0,0", (0.0, 0.0)),
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(s.parse_coordinates(query), expected)
+
+        for query in (
+            "",  # missing input
+            "Bielefeld",  # a place name, not coordinates
+            "52.03 8.53",  # missing comma
+            "52.03,",  # missing second value
+            ",8.53",  # missing first value
+            "52.03,8.53,1",  # a third field
+            "52.03,8.53 extra",  # trailing garbage
+            "91,0",  # latitude out of range
+            "0,181",  # longitude out of range
+            "-91,0",
+            "0,-181",
+            "abc,def",
+            "$(touch /tmp/never),0",  # malformed/adversarial, must not be treated as numeric
+        ):
+            with self.subTest(query=query):
+                self.assertIsNone(s.parse_coordinates(query))
+
     def test_catalog(self):
         self.assertEqual(len(s.ENTRIES), len({(e.category, e.title) for e in s.ENTRIES}))
         shipped_desktop_dir = ROOT / "Configs/.local/share/applications"
@@ -606,14 +636,14 @@ class GtkBehaviour(unittest.TestCase):
             if ctx.get("dialog"):
                 ctx["dialog"].response(s.Gtk.ResponseType.CANCEL)
 
-        def find_descendant(widget, gtype):
+        def find_descendant(widget, gtype, name=None):
             # ScrolledWindow wraps a non-Scrollable child (Gtk.ListBox) in an
             # implicit Gtk.Viewport, so a fixed child-index path is fragile;
             # search the tree instead.
-            if isinstance(widget, gtype):
+            if isinstance(widget, gtype) and (name is None or widget.get_name() == name):
                 return widget
             for child in getattr(widget, "get_children", lambda: [])():
-                found = find_descendant(child, gtype)
+                found = find_descendant(child, gtype, name)
                 if found:
                     return found
             return None
@@ -624,7 +654,7 @@ class GtkBehaviour(unittest.TestCase):
                               if isinstance(w, s.Gtk.Dialog) and w.get_title() == "Weather location")
                 area = dialog.get_content_area()
                 search = find_descendant(area, s.Gtk.SearchEntry)
-                status = find_descendant(area, s.Gtk.Label)
+                status = find_descendant(area, s.Gtk.Label, name="weather-status")
                 results = find_descendant(area, s.Gtk.ListBox)
                 ctx.update(dialog=dialog, search=search, status=status, results=results)
                 # Safety net: never leave dialog.run() blocking the test forever.
@@ -689,11 +719,11 @@ class GtkBehaviour(unittest.TestCase):
             commands.append(argv)
             return ""
 
-        def find_descendant(widget, gtype):
-            if isinstance(widget, gtype):
+        def find_descendant(widget, gtype, name=None):
+            if isinstance(widget, gtype) and (name is None or widget.get_name() == name):
                 return widget
             for child in getattr(widget, "get_children", lambda: [])():
-                found = find_descendant(child, gtype)
+                found = find_descendant(child, gtype, name)
                 if found:
                     return found
             return None
@@ -760,11 +790,11 @@ class GtkBehaviour(unittest.TestCase):
             commands.append(argv)
             return ""
 
-        def find_descendant(widget, gtype):
-            if isinstance(widget, gtype):
+        def find_descendant(widget, gtype, name=None):
+            if isinstance(widget, gtype) and (name is None or widget.get_name() == name):
                 return widget
             for child in getattr(widget, "get_children", lambda: [])():
-                found = find_descendant(child, gtype)
+                found = find_descendant(child, gtype, name)
                 if found:
                     return found
             return None
@@ -780,7 +810,7 @@ class GtkBehaviour(unittest.TestCase):
                               if isinstance(w, s.Gtk.Dialog) and w.get_title() == "Weather location")
                 area = dialog.get_content_area()
                 search = find_descendant(area, s.Gtk.SearchEntry)
-                status = find_descendant(area, s.Gtk.Label)
+                status = find_descendant(area, s.Gtk.Label, name="weather-status")
                 results = find_descendant(area, s.Gtk.ListBox)
                 ctx.update(dialog=dialog, search=search, status=status, results=results)
                 s.GLib.timeout_add(5000, lambda: (dialog.response(s.Gtk.ResponseType.CANCEL), False)[1])
