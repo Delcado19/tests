@@ -25,7 +25,7 @@ grep -q 'global.package_managers' "$REPO_ROOT/Scripts/dots-groups/shell.toml" &&
 installer_flat=$(tr '\n' ' ' <"$REPO_ROOT/Scripts/install.sh")
 
 case "$installer_flat" in
-*'deps --install --config "${scrDir}/dots-groups/shell.toml"'*'--dots "${myShell}"'*) ;;
+*'deps --install --config "${installDir}/dots-groups/shell.toml"'*'--dots "${myShell}"'*) ;;
 *) fail "the installer does not limit the shell dependency step to the chosen shell" ;;
 esac
 

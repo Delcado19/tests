@@ -39,9 +39,11 @@ printf 'import sys\nsys.exit(0)\n' >"$clone_dir/Configs/.local/lib/hyde/pyutils/
 # test_install_env; this case only needs it out of the way.
 printf 'import sys\nsys.exit(0)\n' >"$clone_dir/Configs/.local/lib/hyde/pyutils/python_env.py"
 
+env_log="$work_dir/env.log"
 mkdir -p "$home_dir/.local/state/hyde/python_env/bin" "$home_dir/.local/lib/hyde/wallpaper"
 for helper in "wallpaper/cache.sh" "theme.switch.sh" "waybar.py"; do
-    printf '#!/usr/bin/env sh\nprintf "%%s\\n" "%s" >>"%s"\n' "$(basename "$helper")" "$ran_log" \
+    printf '#!/usr/bin/env sh\nprintf "%%s\\n" "%s" >>"%s"\nprintf "LIB_DIR=%%s SHARE_DIR=%%s\\n" "$LIB_DIR" "$SHARE_DIR" >>"%s"\n' \
+        "$(basename "$helper")" "$ran_log" "$env_log" \
         >"$home_dir/.local/lib/hyde/$helper"
     chmod +x "$home_dir/.local/lib/hyde/$helper"
 done
@@ -49,7 +51,10 @@ done
 # environment for the calls above -- a real deploy writes it via the "hyde"
 # dot (core.toml), but deez is stubbed out below and never touches disk, so
 # it has to be stood up here like the helpers above or the source fails.
-: >"$home_dir/.local/lib/hyde/globalcontrol.sh"
+# The one line of the real globalcontrol.sh that matters here: it
+# unconditionally exports its own scrDir into whatever process sources it --
+# which is install.sh's own process, not a subshell.
+printf 'export scrDir="${LIB_DIR:-$HOME/.local/lib}/hyde"\n' >"$home_dir/.local/lib/hyde/globalcontrol.sh"
 
 deez_exe="$home_dir/.local/state/hyde/python_env/bin/deez"
 # The environment step syncs through the interpreter in that environment.
@@ -74,6 +79,7 @@ write_deez_stub() {
 run_restore() {
     : >"$ran_log"
     : >"$deez_log"
+    : >"$env_log"
     # A fresh state directory per run: the migration runner records what it
     # applied, so a shared one would make the second run look like it skipped
     # the step it was told to repeat.
@@ -103,6 +109,11 @@ ran restore_thm || fail "a clean restore did not apply the theme"
 ran migration || fail "a clean restore did not run the migrations"
 ran restore_svc || fail "a clean restore did not enable the services"
 ran cache.sh || fail "a clean restore did not rebuild the wallpaper cache"
+# install.sh's own scrDir (repo-relative, used for restore_svc.sh/migrations/
+# install_pst.sh) must survive sourcing globalcontrol.sh, which exports its
+# own same-named scrDir (deployed-lib-relative) into this same process.
+grep -qx "LIB_DIR=$home_dir/.local/lib SHARE_DIR=$home_dir/.local/share" "$env_log" ||
+    fail "a helper ran without hyde-shell's LIB_DIR/SHARE_DIR set (got: $(cat "$env_log" 2>/dev/null))"
 
 # The core deployment fails: the remaining steps still run, and the run ends
 # non-zero saying what happened.
@@ -117,6 +128,8 @@ ran restore_thm || fail "a failed deployment stopped the theme from being applie
 ran migration || fail "a failed deployment stopped the migrations from running"
 ran restore_svc || fail "a failed deployment stopped the services from being enabled"
 ran cache.sh || fail "a failed deployment stopped the wallpaper cache from being rebuilt"
+grep -qx "LIB_DIR=$home_dir/.local/lib SHARE_DIR=$home_dir/.local/share" "$env_log" ||
+    fail "a helper ran without hyde-shell's LIB_DIR/SHARE_DIR set (got: $(cat "$env_log" 2>/dev/null))"
 grep -q 'Some dots were not deployed' "$work_dir/out.log" ||
     fail "a failed deployment did not say so at the end of the run"
 grep -q 'COMPLETED' "$work_dir/out.log" &&
