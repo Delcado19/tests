@@ -133,6 +133,51 @@ class Logic(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/a b"}):
             self.assertEqual(s.xdg_path("XDG_CONFIG_HOME", ".config"), Path("/tmp/a b"))
 
+    def test_user_conf_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"XDG_STATE_HOME": tmp}):
+            # missing input
+            self.assertEqual(s.read_user_conf("NOPE"), "")
+
+            s.write_user_conf("PLAIN", "Bielefeld")
+            self.assertEqual(s.read_user_conf("PLAIN"), "Bielefeld")
+
+            # malformed/out-of-spec values a geocoding API could plausibly send:
+            # quotes, an apostrophe, backticks, a command substitution, a
+            # backslash. The regression this guards: these used to go straight
+            # into export KEY="value" unescaped, so sourcing the file executed
+            # them.
+            for value in (
+                'Bielefeld, "Germany"',
+                "O'Brien's Town",
+                "$(touch /tmp/hyde-settings-test-pwned)",
+                "`id`",
+                "back\\slash",
+            ):
+                s.write_user_conf("PLACE", value)
+                self.assertEqual(s.read_user_conf("PLACE"), value)
+
+                result = subprocess.run(
+                    ["bash", "-c", f'source "{s.user_conf_path()}" && printf %s "$PLACE"'],
+                    capture_output=True, text=True, timeout=3, check=True,
+                )
+                self.assertEqual(result.stdout, value)
+            self.assertFalse(Path("/tmp/hyde-settings-test-pwned").exists())
+
+            # boundary: empty string
+            s.write_user_conf("EMPTY", "")
+            self.assertEqual(s.read_user_conf("EMPTY"), "")
+
+            # a newline can't survive the line-based reader; collapsed, not corrupted
+            s.write_user_conf("MULTILINE", "line one\nline two")
+            self.assertEqual(s.read_user_conf("MULTILINE"), "line one line two")
+
+            # overwrite replaces, doesn't duplicate, and leaves sibling keys alone
+            s.write_user_conf("PLAIN", "Rewritten")
+            self.assertEqual(s.read_user_conf("PLAIN"), "Rewritten")
+            contents = s.user_conf_path().read_text()
+            self.assertEqual(contents.count("export PLAIN="), 1)
+            self.assertEqual(s.read_user_conf("EMPTY"), "")
+
     def test_failed_probes(self):
         for error in (FileNotFoundError(), PermissionError(), subprocess.TimeoutExpired("probe", 3), UnicodeError()):
             with patch.object(s.subprocess, "run", side_effect=error):
