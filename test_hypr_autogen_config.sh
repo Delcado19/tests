@@ -138,4 +138,70 @@ invoke
 [ "$rc" -ne 0 ] || fail "unusable backup dir: reported success"
 [ -f "$target" ] || fail "unusable backup dir: file was lost"
 
+# 13. the exact header line, but only after the user's own code: untouched
+run_case
+printf '%s\n' "$loader" 'hl.config({ general = { gaps_in = 2 } })' '' "$autogen_body" >"$target"
+invoke
+[ -f "$target" ] && [ "$(backups)" -eq 0 ] || fail "header after user code: file was moved"
+
+# 14. with only comments and blank lines before it, Hyprland's header still
+# counts; after a leading code line it does not
+run_case
+printf '%s\n' '-- my notes' '' '-- more notes' "$autogen_body" >"$target"
+invoke
+[ ! -e "$target" ] || fail "header after leading comments: not moved aside"
+run_case
+printf '%s\n' 'local x = 1' '-- my notes' "$autogen_body" >"$target"
+invoke
+[ -f "$target" ] || fail "header after a leading code line: file was moved"
+
+# 15. only the loader's own block is skipped, not any block ending in 'end'
+run_case
+printf '%s\n' 'if other then' 'end' "$autogen_body" >"$target"
+invoke
+[ -f "$target" ] || fail "header after a non-loader block: file was moved"
+
+# Restore: puts the retired file back only when the deploy left nothing there.
+restore() {
+    rc=0
+    restore_retired_hypr_config "$target" >/dev/null 2>&1 || rc=$?
+}
+
+# 16. deploy did not replace it: the retired file goes back, content intact
+run_case
+printf '%s\n%s\n' "$loader" "$autogen_body" >"$target"
+cp "$target" "$work_dir/expected"
+invoke
+restore
+[ "$rc" -eq 0 ] && cmp -s "$target" "$work_dir/expected" ||
+    fail "restore after failed deploy: file not put back (rc=$rc)"
+
+# 17. deploy put the template in place: left as is, backup kept
+run_case
+printf '%s\n' "$autogen_body" >"$target"
+invoke
+printf 'template\n' >"$target"
+restore
+[ "$rc" -eq 0 ] && [ "$(cat "$target")" = template ] && [ "$(backups)" -eq 1 ] ||
+    fail "restore after successful deploy: template or backup touched"
+
+# 18. a later run that retired nothing resets the record: a missing target
+# stays missing instead of getting an older run's file
+run_case
+printf '%s\n' "$autogen_body" >"$target"
+invoke
+run_case
+printf 'plain\n' >"$target"
+invoke
+rm -f "$target"
+restore
+[ "$rc" -eq 0 ] && [ ! -e "$target" ] || fail "restore without a retire: something was put back"
+
+# 19. a dry run records nothing to restore
+run_case
+printf '%s\n' "$autogen_body" >"$target"
+flg_DryRun=1 invoke
+restore
+[ "$rc" -eq 0 ] && [ -f "$target" ] || fail "restore after dry run: target changed"
+
 finish
