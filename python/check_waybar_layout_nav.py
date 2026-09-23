@@ -214,4 +214,29 @@ try:
 finally:
     wb.LAYOUT_DIRS = saved_dirs
 
+# 12. no layouts and no state at all: the error names the missing layouts,
+# not the state file
+errors: list[str] = []
+saved_error = wb.logger.error
+wb.logger.error = lambda msg, *a, **k: errors.append(str(msg))
+try:
+    reset()
+    wb.STATE_FILE.unlink()
+    navigate("--next")
+finally:
+    wb.logger.error = saved_error
+if not any("No layouts found" in e for e in errors):
+    fail(f"no layouts and no state: logged {errors}, expected 'No layouts found'")
+
+# 13. the saved layout is gone but config.jsonc still matches a real layout:
+# that layout is the current one, so --next goes to the one after it, not
+# back to the first
+reset(config='{"m":1}')
+a = write(data_layouts / "alpha.jsonc", '{"a":1}')
+m = write(data_layouts / "mid.jsonc", '{"m":1}')
+z = write(data_layouts / "zeta.jsonc", '{"z":1}')
+wb.STATE_FILE.write_text(f"WAYBAR_LAYOUT_PATH={data_layouts / 'deleted.jsonc'}\n")
+if navigate("--next") != z:
+    fail("saved layout gone, config matches mid: --next did not go to zeta")
+
 sys.exit(1 if failures else 0)
