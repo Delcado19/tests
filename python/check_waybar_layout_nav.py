@@ -159,4 +159,59 @@ reset(state="WAYBAR_STYLE_PATH=/nowhere.css\n")
 write(data_layouts / "alpha.jsonc", '{"a":1}')
 navigate("--next")
 
+# 7. a layout path containing "=" stays whole when read back from the state
+reset()
+a = write(data_layouts / "alpha.jsonc", '{"a":1}')
+eq = write(data_layouts / "x=y/eq.jsonc", '{"e":1}')
+z = write(data_layouts / "zeta.jsonc", '{"z":1}')
+wb.STATE_FILE.write_text(f"WAYBAR_LAYOUT_PATH={eq}\n")
+if navigate("--next") != z:
+    fail("--next from a layout whose path contains '=' did not go to the next layout")
+
+# 8. an empty WAYBAR_LAYOUT_PATH value: logs, applies nothing, no crash
+reset(state="WAYBAR_LAYOUT_PATH=\n")
+write(data_layouts / "alpha.jsonc", '{"a":1}')
+if navigate("--next") is not None:
+    fail("--next applied a layout from an empty state value")
+
+# 9. no state file at all: logs, no crash (used to raise FileNotFoundError)
+reset()
+write(data_layouts / "alpha.jsonc", '{"a":1}')
+wb.STATE_FILE.unlink()
+navigate("--next")
+
+# 10. only a "backup" directory below the layout root counts
+root = work / "backup" / "home" / "layouts"  # the root itself sits under backup/
+for path, expected in (
+    (root / "a.jsonc", False),
+    (root / "backup.jsonc", False),          # a file named backup
+    (root / "backups" / "b.jsonc", False),   # a similar directory name
+    (root / "Backup" / "c.jsonc", False),    # case matters, as for the walk
+    (root / "backup" / "d.jsonc", True),
+    (root / "themes" / "backup" / "e.jsonc", True),
+):
+    if getattr(wb, "in_backup_dir", lambda *_: None)(str(path), str(root)) != expected:
+        fail(f"in_backup_dir({path.relative_to(work)}) is not {expected}")
+
+# 11. a home that itself lies under a directory named backup: its layouts are
+# still layouts, and navigation works
+saved_dirs = wb.LAYOUT_DIRS
+wb.LAYOUT_DIRS = [str(root)]
+try:
+    reset()
+    ra = write(root / "alpha.jsonc", '{"a":1}')
+    rz = write(root / "zeta.jsonc", '{"z":1}')
+    rb = write(root / "backup" / "old.jsonc", '{"o":1}')
+    listing = wb.list_layouts()
+    names = sorted(e["layout"] for e in listing["layouts"] if not e.get("is_backup_entry"))
+    if names != [ra, rz]:
+        fail(f"layouts under a backup-named parent: {names}")
+    if [b["layout"] for b in listing["backups"]] != [rb]:
+        fail(f"backups under a backup-named parent: {listing['backups']}")
+    wb.STATE_FILE.write_text(f"WAYBAR_LAYOUT_PATH={ra}\n")
+    if navigate("--next") != rz:
+        fail("--next under a backup-named parent did not reach zeta")
+finally:
+    wb.LAYOUT_DIRS = saved_dirs
+
 sys.exit(1 if failures else 0)
