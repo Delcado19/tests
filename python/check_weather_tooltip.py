@@ -9,6 +9,7 @@ or crashing the module, and text from wttr.in cannot inject markup.
 
 from __future__ import annotations
 
+import html
 import importlib.util
 import os
 import pathlib
@@ -188,6 +189,31 @@ class Table(unittest.TestCase):
         self.assertIn("Rain &amp; &lt;b&gt;hail&lt;/b&gt;", text)
         facts = w.build_facts(report([day([hour()])], weatherDesc=[{"value": "<i>x</i> & y"}]))
         self.assertIn("&lt;i&gt;x&lt;/i&gt; &amp; y", facts)
+
+    def test_markup_characters_do_not_skew_the_columns(self):
+        # &amp; is five characters but one drawn cell: pad first, escape after.
+        days = [day([hour(desc="Rain & hail"), hour("1200", desc="<storm>"), hour("1500", desc="a>b"), hour("1800")])]
+        rows, _ = self.rows(days)
+        drawn = [html.unescape(ln) for ln in rows]
+        ends = {tuple(m.end() for m in re.finditer(r"\d+%", ln)) for ln in drawn}
+        self.assertEqual(len(ends), 1, drawn)
+
+    def test_markup_in_a_heading_label_does_not_skew_the_columns(self):
+        # A one-cell label over four-cell numbers has to be padded by three cells.
+        os.environ["WEATHER_CHANCE_LABEL_RAIN"] = "&"
+        self.addCleanup(os.environ.pop, "WEATHER_CHANCE_LABEL_RAIN", None)
+        text = html.unescape(plain(w.build_forecast(report([day([hour(chanceofrain="100")])]), 0, 3)))
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        row = next(ln for ln in text.splitlines() if "100%" in ln)
+        self.assertEqual(head.index("&") + 1, row.index("100%") + len("100%"))
+
+    def test_unparsable_sun_times_cannot_inject_markup(self):
+        d = day([hour()])
+        d["astronomy"] = [{"sunrise": "<i>x</i> & y", "sunset": "</b><u>"}]
+        text = w.build_forecast(report([d]), 0, 3)
+        self.assertIn("&lt;i&gt;x&lt;/i&gt; &amp; y", text)
+        self.assertNotIn("<i>", text)
+        self.assertNotIn("<u>", text)
 
     def test_wide_characters_count_two_cells(self):
         rows, _ = self.rows([day([hour(desc="晴れ"), hour("1200", desc="Clear")])])
