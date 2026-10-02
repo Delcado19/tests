@@ -147,6 +147,16 @@ if not launched:
     fail("no launch without a border-radius template")
 if not (includes / "global.css").is_file():
     fail("global.css missing when the border-radius template is absent")
+# the imported file must still exist (a missing @import kills Waybar), and a
+# later run with the template present must regenerate it properly
+if not (includes / "border-radius.css").is_file():
+    fail("border-radius.css missing when its template is absent; defaults.css import would fail")
+wb.INCLUDES_DIRS = saved
+os.environ["WAYBAR_BORDER_RADIUS"] = "6"
+wb.watch_waybar()
+if "6pt" not in (includes / "border-radius.css").read_text():
+    fail("a stub border-radius.css was not replaced once the template reappeared")
+os.environ.pop("WAYBAR_BORDER_RADIUS", None)
 wb.INCLUDES_DIRS = saved
 
 sys.exit(1 if failures else 0)
