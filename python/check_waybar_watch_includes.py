@@ -99,4 +99,54 @@ except Exception as e:  # noqa: BLE001
 if not launched:
     fail("watch_waybar() skipped the launch on a malformed border radius")
 
+# 5. radius boundaries and wrong types: always launches, and the value that is
+#    written is a usable pt size (valid numbers applied, everything else falls
+#    back to a positive default)
+import re  # noqa: E402
+
+wb.get_value_from_hypr_theme = lambda *a, **k: None
+wb.HYPRLAND.HyprctlWrapper.getoption = staticmethod(lambda *a, **k: (_ for _ in ()).throw(OSError("no ipc")))
+for raw, expected in (("8", 8), ("", 2), ("0", 2), ("-5", 2), ("8.5", 2), (" 8 ", 8), ("1", 1),
+                      ("999999", 999999), ("0x10", 2), ("١٢", 12)):
+    reset()
+    os.environ["WAYBAR_BORDER_RADIUS"] = raw
+    try:
+        wb.watch_waybar()
+    except Exception as e:  # noqa: BLE001
+        fail(f"watch_waybar() raised for WAYBAR_BORDER_RADIUS={raw!r}: {e!r}")
+        continue
+    if not launched:
+        fail(f"no launch for WAYBAR_BORDER_RADIUS={raw!r}")
+    sizes = set(re.findall(r"(\d+)pt", css[0].read_text())) if css[0].is_file() else set()
+    if sizes != {str(expected)}:
+        fail(f"WAYBAR_BORDER_RADIUS={raw!r}: border-radius.css uses {sorted(sizes)}, expected {expected}pt")
+os.environ.pop("WAYBAR_BORDER_RADIUS", None)
+
+# 6. a corrupt includes.json from an older run must not block the launch
+for junk in ("", "{not json", "[]", "null", '{"include": 5}'):
+    reset(preexisting=True)
+    (includes / "includes.json").write_text(junk)
+    try:
+        wb.watch_waybar()
+    except Exception as e:  # noqa: BLE001
+        fail(f"watch_waybar() raised on includes.json={junk!r}: {e!r}")
+        continue
+    if not launched:
+        fail(f"no launch with includes.json={junk!r}")
+
+# 7. no border-radius template anywhere: global.css is still written and
+#    waybar is still launched
+saved = wb.INCLUDES_DIRS
+wb.INCLUDES_DIRS = []
+reset()
+try:
+    wb.watch_waybar()
+except Exception as e:  # noqa: BLE001
+    fail(f"watch_waybar() raised without a border-radius template: {e!r}")
+if not launched:
+    fail("no launch without a border-radius template")
+if not (includes / "global.css").is_file():
+    fail("global.css missing when the border-radius template is absent")
+wb.INCLUDES_DIRS = saved
+
 sys.exit(1 if failures else 0)
