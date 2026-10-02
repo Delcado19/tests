@@ -159,4 +159,34 @@ if "6pt" not in (includes / "border-radius.css").read_text():
 os.environ.pop("WAYBAR_BORDER_RADIUS", None)
 wb.INCLUDES_DIRS = saved
 
+# 8. files that are not valid UTF-8 (includes.json, border-radius.css) are
+#    replaced or tolerated, never fatal
+reset(preexisting=True)
+(includes / "includes.json").write_bytes(b"\xff\xfe{\x80")
+css[0].write_bytes(b"\xff\xfe garbage \x80")
+try:
+    wb.watch_waybar()
+except Exception as e:  # noqa: BLE001
+    fail(f"watch_waybar() raised on non-UTF-8 includes: {e!r}")
+if not launched:
+    fail("no launch with non-UTF-8 includes")
+if "pt" not in css[0].read_text(encoding="utf-8", errors="replace"):
+    fail("a non-UTF-8 border-radius.css was not replaced from the template")
+
+# 9. an unwritable includes directory must not block the launch (skipped as
+#    root, which ignores permissions)
+if os.geteuid() != 0:
+    reset(preexisting=True)
+    (includes / "includes.json").write_text("{}")
+    for f in (*css, includes / "includes.json"):
+        f.chmod(0o400)
+    includes.chmod(0o500)
+    try:
+        wb.watch_waybar()
+    except Exception as e:  # noqa: BLE001
+        fail(f"watch_waybar() raised in a read-only includes directory: {e!r}")
+    if not launched:
+        fail("no launch in a read-only includes directory")
+    includes.chmod(0o700)
+
 sys.exit(1 if failures else 0)
