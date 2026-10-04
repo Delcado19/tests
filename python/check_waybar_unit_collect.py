@@ -81,11 +81,19 @@ try:
     if systemd_run_results[-1].returncode != 0:
         fail(f"first systemd-run (the one meant to fail) didn't even launch: {systemd_run_results[-1].stderr}")
 
-    for _ in range(50):
+    # Wait for a terminal state, not just "not activating anymore": Type=exec
+    # reports "active" the instant the payload starts, before it has actually
+    # exited and failed. Proceeding on "active" races the real --collect
+    # behaviour under test, not just the bar it stands in for.
+    terminal_states = {"failed", "inactive"}
+    state = ""
+    for _ in range(100):
         state = real_run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True).stdout.strip()
-        if state != "activating":
+        if state in terminal_states:
             break
         time.sleep(0.1)
+    else:
+        fail(f"unit {unit} did not reach a terminal state within 10s (stuck at {state!r})")
 
     wb.run_waybar()  # same `unit` name again, while the failed one may still be loaded
     recreate = systemd_run_results[-1]
