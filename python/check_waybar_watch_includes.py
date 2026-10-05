@@ -72,6 +72,11 @@ for f in css:
         fail(f"watch_waybar() left {f.name} missing")
 if not launched:
     fail("watch_waybar() did not launch waybar")
+# --collect lets systemd unload the unit immediately on start-limit-hit, so
+# the next watch_waybar()/run_waybar() can recreate it under the same name
+# (HyDE-Project/HyDE#2160 comment on the stuck `failed` unit).
+elif "--collect" not in launched[-1]:
+    fail("watch_waybar() launched waybar without --collect")
 
 # 2. waybar already running: nothing is touched and nothing is launched
 reset()
@@ -188,5 +193,19 @@ if os.geteuid() != 0:
     if not launched:
         fail("no launch in a read-only includes directory")
     includes.chmod(0o700)
+
+# 10. run_waybar()'s systemd-run fallback (used by restart_waybar(), i.e.
+# `hyde-shell reload` / `waybar --update`) must also --collect, or a unit
+# stuck `failed` from a prior start-limit-hit blocks the recreate with
+# "Unit already exists" (HyDE-Project/HyDE#2160).
+class _FailedStart:
+    returncode = 1
+
+
+launched.clear()
+wb.subprocess.run = lambda cmd, *a, **k: (launched.append(cmd), _FailedStart())[1]
+wb.run_waybar()
+if not launched or "--collect" not in launched[-1]:
+    fail("run_waybar()'s systemd-run fallback is missing --collect")
 
 sys.exit(1 if failures else 0)
