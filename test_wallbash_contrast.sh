@@ -148,8 +148,8 @@ source <(sed -n '/^create_wallbash_substitutions() {/,/^}/p' "$color_set")
 rgba_to_rgb() { :; } # unrelated helper referenced only outside this function
 
 render_kitty_ansi_lines() {
-    local sed_script
-    sed_script=$(create_wallbash_substitutions false)
+    local use_inverted="${1:-false}" sed_script
+    sed_script=$(create_wallbash_substitutions "$use_inverted")
     sed -E "$sed_script" "$kitty_dcol" | grep -E "^color(0|7|8|15)"
 }
 
@@ -195,6 +195,26 @@ esac
 case "$rendered" in
 *"#ffe4cc"*) ;;
 *) fail "pre-fix .dcol: color7/15 did not fall back to dcol_4xa9: $rendered" ;;
+esac
+
+# 2b. same pre-fix shape, inverted mode (a light-variant theme/preset): the
+# pre-fix template substituted <wallbash_1xaN>/<wallbash_4xaN> through the
+# same src_i swap every other group uses (i=1 reads group 4, i=4 reads group
+# 1), so the fallback must swap too -- a static "always read 1xa1/4xa9"
+# fallback would read the wrong half of the palette once inverted, a bug
+# CodeRabbit caught in review on this PR (HyDE-Project/HyDE#2190).
+unset "${!dcol_@}"
+dcol_4xa1="inverted-black-source"
+dcol_1xa9="inverted-white-source"
+rendered=$(render_kitty_ansi_lines true)
+assert_no_placeholder "pre-fix .dcol, inverted mode" "$rendered"
+case "$rendered" in
+*"#inverted-black-source"*) ;;
+*) fail "pre-fix .dcol, inverted mode: color0/8 did not fall back to dcol_4xa1 (the inverted-mode source for template slot 1): $rendered" ;;
+esac
+case "$rendered" in
+*"#inverted-white-source"*) ;;
+*) fail "pre-fix .dcol, inverted mode: color7/15 did not fall back to dcol_1xa9 (the inverted-mode source for template slot 4): $rendered" ;;
 esac
 
 # 3. nothing at all: neither the new fields nor the old ones are set (an
