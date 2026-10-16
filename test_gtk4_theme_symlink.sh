@@ -179,6 +179,19 @@ else
     [ -z "$stray" ] || fail "a failed migration left a stray staged temp file: $stray"
 fi
 
+# --- a theme whose gtk-4.0 directory is itself a symlink is still followed ---
+reset_fixture
+real_theme_gtk4="$work_dir/theme-gtk-4.0-real"
+rm -rf "$real_theme_gtk4"
+mkdir -p "$real_theme_gtk4"
+printf 'theme gtk.css\n' >"$real_theme_gtk4/gtk.css"
+ln -s "$real_theme_gtk4" "$theme_gtk4"
+expect "0" "$(run_link)" "a symlinked theme gtk-4.0 directory still exits 0"
+expect "$theme_gtk4/gtk.css" "$(readlink -- "$conf_gtk4/gtk.css")" \
+    "a theme whose gtk-4.0 directory is itself a symlink is still followed and linked"
+expect "theme gtk.css" "$(cat -- "$conf_gtk4/gtk.css" 2>/dev/null)" \
+    "the file reached through the symlinked theme directory has the real content"
+
 # --- running twice in a row is stable ---
 reset_fixture
 mkdir -p "$theme_gtk4"
