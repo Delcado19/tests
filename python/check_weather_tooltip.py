@@ -223,15 +223,25 @@ class Table(unittest.TestCase):
         self.assertEqual(w._width("é"), 1)  # combining accent
 
     def test_rare_events_have_no_commas_and_three_spaces_between(self):
-        h = hour(chanceoffog="57", chanceofthunder="3", chanceoffrost="0")
+        # Fog/Frost get their own columns (see test_fog_and_frost_have_their_own_columns);
+        # Snow/Thunder are the ones still sharing the unlabeled rest column.
+        h = hour(chanceofsnow="57", chanceofthunder="3")
         rows, text = self.rows([day([h])])
-        self.assertIn("Fog 57%   Thunder 3%", rows[0])
+        self.assertIn("Snow 57%   Thunder 3%", rows[0])
         self.assertNotIn(",", rows[0])
 
     def test_rare_event_junk_is_ignored(self):
-        rows, _ = self.rows([day([hour(chanceoffog="abc", chanceofsnow="nan")])])
-        self.assertNotIn("Fog", rows[0])
+        rows, _ = self.rows([day([hour(chanceofsnow="nan")])])
         self.assertNotIn("Snow", rows[0])
+
+    def test_fog_and_frost_have_their_own_columns(self):
+        _, text = self.rows([day([hour(chanceoffog="57", chanceoffrost="1")])])
+        lines = text.splitlines()
+        head = next(ln for ln in lines if ln.startswith("Hour"))
+        row = next(ln for ln in lines if "57%" in ln)
+        self.assertIn("Fog", head)
+        self.assertIn("Frost", head)
+        self.assertEqual(head.index("Fog") + len("Fog"), row.index("57%") + len("57%"))
 
     def test_no_trailing_whitespace_on_table_lines(self):
         _, text = self.rows([day([hour(), hour("1200", chanceoffog="9")])])
