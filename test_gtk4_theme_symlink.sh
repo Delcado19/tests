@@ -157,6 +157,28 @@ run_link >/dev/null
 expect "icon" "$(cat -- "$conf_gtk4/assets/icon.svg" 2>/dev/null)" \
     "a file inside the linked assets/ directory is reachable"
 
+# --- a failed migration leaves the old symlink and the real file untouched ---
+if [ "$(id -u)" -eq 0 ]; then
+    skip "running as root: a permission failure cannot be simulated"
+else
+    reset_fixture
+    mkdir -p "$old_gtk4" "$theme_gtk4"
+    printf 'precious prefs\n' >"$old_gtk4/settings.ini"
+    chmod 000 "$old_gtk4/settings.ini"
+    printf 'theme gtk.css\n' >"$theme_gtk4/gtk.css"
+    ln -s "$old_gtk4" "$conf_gtk4"
+    expect "1" "$(run_link 2>/dev/null)" \
+        "a migration that cannot read settings.ini fails instead of silently dropping it"
+    [ -L "$conf_gtk4" ] || fail "a failed migration replaced the old symlink anyway"
+    expect "$old_gtk4" "$(readlink -- "$conf_gtk4")" \
+        "a failed migration leaves the old symlink pointing at the original directory"
+    chmod 600 "$old_gtk4/settings.ini"
+    expect "precious prefs" "$(cat -- "$old_gtk4/settings.ini")" \
+        "a failed migration leaves the original settings.ini content intact"
+    stray=$(find "$work_dir" -maxdepth 1 -name "$(basename -- "$conf_gtk4").settings.ini.*" 2>/dev/null)
+    [ -z "$stray" ] || fail "a failed migration left a stray staged temp file: $stray"
+fi
+
 # --- running twice in a row is stable ---
 reset_fixture
 mkdir -p "$theme_gtk4"
