@@ -75,6 +75,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _garbage_port() -> int:
+    """A server that answers every connection with a non-HTTP line."""
+    import socket
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen()
+
+    def serve():
+        while True:
+            conn, _ = srv.accept()
+            conn.recv(1024)
+            conn.sendall(b"NOT-HTTP garbage\r\n\r\n")
+            conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return srv.getsockname()[1]
+
+
 def check_art_path(mc) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
@@ -114,6 +133,17 @@ def check_art_path(mc) -> None:
 
             # Nothing listens on port 9 (discard); must fail fast, not raise.
             check(mc.art_path("http://127.0.0.1:9/x.png", cache) is None, "unreachable art host should give None")
+
+            # Malformed URLs and broken servers raise outside OSError/ValueError
+            # (urlparse ValueError, http.client.InvalidURL / BadStatusLine); an
+            # exception would kill the fetch thread and leave the old cover up.
+            for bad in ("http://[abc/x.png", base + "/cover .png", f"http://127.0.0.1:{_garbage_port()}/x.png"):
+                try:
+                    got_bad = mc.art_path(bad, cache)
+                except Exception as err:  # noqa: BLE001
+                    fail(f"art_path({bad!r}) raised {type(err).__name__} instead of returning None")
+                else:
+                    check(got_bad is None, f"art_path({bad!r}) should give None")
         finally:
             server.shutdown()
 
@@ -144,10 +174,39 @@ def check_prune_cache(mc) -> None:
         mc.prune_cache(tmp / "missing")  # no cache dir yet: no error
 
 
+def check_configured(mc) -> None:
+    # MEDIAPLAYER_PLAYERS comes from the environment or, like mediaplayer.py
+    # reads it, from $XDG_STATE_HOME/hyde/config (export KEY="value" lines).
+    with tempfile.TemporaryDirectory() as tmp:
+        state = pathlib.Path(tmp)
+        (state / "hyde").mkdir()
+        (state / "hyde/config").write_text(
+            '# comment\nexport MEDIAPLAYER_PLAYERSX="nope"\nexport MEDIAPLAYER_PLAYERS="spotify,vlc"\n'
+        )
+        saved = os.environ.pop("MEDIAPLAYER_PLAYERS", None)
+        try:
+            check(mc.configured("MEDIAPLAYER_PLAYERS", state) == "spotify,vlc",
+                  "MEDIAPLAYER_PLAYERS should be read from the HyDE state config")
+            os.environ["MEDIAPLAYER_PLAYERS"] = "mpv"
+            check(mc.configured("MEDIAPLAYER_PLAYERS", state) == "mpv", "the environment should win over the config file")
+            del os.environ["MEDIAPLAYER_PLAYERS"]
+            check(mc.configured("MEDIAPLAYER_PLAYERS", state / "missing") is None, "missing config should give None")
+        finally:
+            if saved is not None:
+                os.environ["MEDIAPLAYER_PLAYERS"] = saved
+
+
 def check_cache_location(mc) -> None:
     # Runtime dir (tmpfs, wiped at logout), not ~/.cache.
     cache = mc.art_cache_dir(pathlib.Path("/run/user/1000"))
     check(cache == pathlib.Path("/run/user/1000/hyde/mediacover"), f"art cache should live in the runtime dir, got {cache}")
+    # Without XDG_RUNTIME_DIR, never the shared /tmp (another user could plant
+    # symlinks there that prune_cache would follow): the user's own cache.
+    home_cache = pathlib.Path("/home/u/.cache")
+    check(mc.base_dir(None, home_cache) == home_cache, "missing runtime dir should fall back to the user's cache dir")
+    check(mc.base_dir(pathlib.Path("/run/user/1000"), home_cache) == pathlib.Path("/run/user/1000"),
+          "the runtime dir should win when set")
+    check("/tmp" not in str(mc.base_dir(None, home_cache)), "fallback must not be under /tmp")
 
 
 def check_pick_player(mc) -> None:
@@ -157,6 +216,19 @@ def check_pick_player(mc) -> None:
     check(mc.pick_player(players, "mpv") is None, "--player naming an absent player should give None")
     check(mc.pick_player([("a", "Paused"), ("b", "Paused")], None) == "a", "no playing player should fall back to the first")
     check(mc.pick_player([], None) is None, "no players should give None")
+    # Same eligible players as mediaplayer.py: plasma-browser-integration
+    # mirrors browser players and is skipped; MEDIAPLAYER_PLAYERS limits the
+    # choice unless --player names one.
+    pbi = [("plasma-browser-integration", "Playing"), ("firefox", "Playing")]
+    check(mc.pick_player(pbi, None) == "firefox", "plasma-browser-integration should be skipped")
+    check(mc.pick_player([("plasma-browser-integration", "Playing")], None) is None,
+          "plasma-browser-integration alone should give None")
+    check(mc.pick_player(players, None, allowed=["vlc", "firefox"]) == "firefox",
+          "MEDIAPLAYER_PLAYERS should limit the choice (first allowed, none playing)")
+    check(mc.pick_player(players, None, allowed=["mpv"]) is None, "no allowed player present should give None")
+    check(mc.pick_player(players, "spotify", allowed=["vlc"]) == "spotify", "--player should override MEDIAPLAYER_PLAYERS")
+    check(mc.allowed_players("spotify, vlc") == ["spotify", "vlc"], "MEDIAPLAYER_PLAYERS should split on commas")
+    check(mc.allowed_players("") is None and mc.allowed_players(None) is None, "unset MEDIAPLAYER_PLAYERS means no limit")
 
 
 def check_popup_margin(mc) -> None:
@@ -243,6 +315,7 @@ def main() -> int:
     check_art_path(mc)
     check_prune_cache(mc)
     check_cache_location(mc)
+    check_configured(mc)
     check_pick_player(mc)
     check_popup_margin(mc)
     check_popup_edge(mc)
