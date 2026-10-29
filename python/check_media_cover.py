@@ -118,6 +118,38 @@ def check_art_path(mc) -> None:
             server.shutdown()
 
 
+def check_prune_cache(mc) -> None:
+    # Downloaded art must not pile up: everything mediacover downloaded is
+    # removed except the cover on screen, and nothing outside the cache dir
+    # (file:// art from the player or the music library) is ever touched.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        cache = tmp / "cache"
+        cache.mkdir()
+        old, current, partial = cache / ("a" * 40), cache / ("b" * 40), cache / ("c" * 40 + ".part")
+        for f in (old, current, partial):
+            f.write_bytes(b"x")
+        library = tmp / "library-cover.jpg"
+        library.write_bytes(b"jpg")
+
+        mc.prune_cache(cache, keep=current)
+        check(current.exists(), "prune_cache removed the cover on screen")
+        check(not old.exists() and not partial.exists(), "prune_cache left old downloads behind")
+
+        mc.prune_cache(cache, keep=library)
+        check(library.exists(), "prune_cache touched a file outside the cache dir")
+        check(not any(cache.iterdir()), "keep= outside the cache must still empty the cache")
+
+        mc.prune_cache(cache)
+        mc.prune_cache(tmp / "missing")  # no cache dir yet: no error
+
+
+def check_cache_location(mc) -> None:
+    # Runtime dir (tmpfs, wiped at logout), not ~/.cache.
+    cache = mc.art_cache_dir(pathlib.Path("/run/user/1000"))
+    check(cache == pathlib.Path("/run/user/1000/hyde/mediacover"), f"art cache should live in the runtime dir, got {cache}")
+
+
 def check_pick_player(mc) -> None:
     players = [("firefox", "Paused"), ("spotify", "Playing"), ("vlc", "Stopped")]
     check(mc.pick_player(players, None) == "spotify", "the playing player should win without --player")
@@ -209,6 +241,8 @@ def check_menus() -> None:
 def main() -> int:
     mc = load_module()
     check_art_path(mc)
+    check_prune_cache(mc)
+    check_cache_location(mc)
     check_pick_player(mc)
     check_popup_margin(mc)
     check_popup_edge(mc)
