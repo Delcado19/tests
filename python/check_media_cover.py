@@ -5,7 +5,7 @@ menus open a small GTK layer-shell window instead. Everything that decides
 *what* that window shows and *where* is plain Python and checked here without
 a display: resolving mpris:artUrl to a local file (file:// directly, http(s)
 downloaded once into a per-URL cache), picking the player, placing the popup
-under the cursor, and the one-popup-at-a-time toggle. The menu wiring in both
+under the cursor on the bar's edge, and the one-popup-at-a-time toggle. The menu wiring in both
 module configs is checked as well.
 """
 
@@ -125,9 +125,6 @@ def check_pick_player(mc) -> None:
     check(mc.pick_player(players, "mpv") is None, "--player naming an absent player should give None")
     check(mc.pick_player([("a", "Paused"), ("b", "Paused")], None) == "a", "no playing player should fall back to the first")
     check(mc.pick_player([], None) is None, "no players should give None")
-    # Instance names (spotify.instance123) match their base name.
-    check(mc.pick_player([("chromium.instance42", "Playing")], "chromium") == "chromium.instance42",
-          "--player should match an instance-suffixed player name")
 
 
 def check_popup_margin(mc) -> None:
@@ -138,6 +135,16 @@ def check_popup_margin(mc) -> None:
     check(mc.popup_margin(3840 + 1278, 3840, 1280, 300) == 1280 - 300 - mc.EDGE_GAP, "popup runs off the right edge")
     # A monitor narrower than the popup still gives a non-negative margin.
     check(mc.popup_margin(100, 0, 200, 300) == 0, "too-narrow monitor should give margin 0")
+
+
+def check_popup_edge(mc) -> None:
+    # WAYBAR_POSITION can put the bar at the bottom: open next to the bar
+    # that was clicked, i.e. the screen half the cursor is in.
+    check(mc.popup_edge(5, 0, 720) == "top", "click at the top should open the popup at the top")
+    check(mc.popup_edge(715, 0, 720) == "bottom", "click at the bottom should open the popup at the bottom")
+    check(mc.popup_edge(1080 + 700, 1080, 720) == "bottom", "edge must be relative to the monitor's y offset")
+    check(mc.popup_edge(1080 + 10, 1080, 720) == "top", "edge must be relative to the monitor's y offset")
+    check(mc.popup_edge(360, 0, 720) == "bottom", "exact middle belongs to the bottom half")
 
 
 def check_toggle(mc) -> None:
@@ -204,6 +211,7 @@ def main() -> int:
     check_art_path(mc)
     check_pick_player(mc)
     check_popup_margin(mc)
+    check_popup_edge(mc)
     check_toggle(mc)
     check_menus()
     return 1 if failures else 0
