@@ -196,6 +196,10 @@ def check_configured(mc) -> None:
                   "without a config file the environment value should be used")
             del os.environ["MEDIAPLAYER_PLAYERS"]
             check(mc.configured("MEDIAPLAYER_PLAYERS", state / "missing") is None, "missing config should give None")
+            # load_env_file applies every line in turn, so the last assignment wins.
+            (state / "hyde/config").write_text('export MEDIAPLAYER_PLAYERS="vlc"\nexport MEDIAPLAYER_PLAYERS="mpv,spotify"\n')
+            check(mc.configured("MEDIAPLAYER_PLAYERS", state) == "mpv,spotify",
+                  "a repeated assignment in the config should use the last one, like mediaplayer.py")
         finally:
             if saved is not None:
                 os.environ["MEDIAPLAYER_PLAYERS"] = saved
