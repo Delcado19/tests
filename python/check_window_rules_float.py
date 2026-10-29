@@ -5,11 +5,12 @@ class rule, then ended with a "filemanagers-fullscreen" rule setting
 float = false for every dolphin/nemo/nautilus/ark window to undo it. Being the
 last match, that rule also won over the title rules meant for Dolphin's
 dialogs ("Properties for.*", "Copying — Dolphin", ...), so they tiled
-(HyDE-Project/HyDE#2211).
+(HyDE-Project/HyDE#2211). The same rule's `opaque = true` must stay on the
+file managers' own app ids.
 
 The rules are loaded from the shipped file against a stubbed `hl` and
 evaluated like Hyprland does for a static property: every match field must
-fully match, and the last matching rule that sets `float` wins. These
+fully match, and the last matching rule that sets the property wins. These
 expectations were checked against a live Hyprland 0.56 session.
 """
 
@@ -25,13 +26,13 @@ REPO_ROOT = pathlib.Path(os.environ.get("REPO_ROOT", ".")).resolve()
 LUA_DIR = REPO_ROOT / "Configs/.local/share/hypr/lua"
 
 # Dumps each hl.window_rule call as tab-separated lines:
-#   R <name> <float: true|false|nil>
+#   R <name> <float: true|false|nil> <opaque: true|false|nil>
 #   M <field> <pattern or boolean>
 DUMP = r"""
 local lua_dir = os.getenv("HYDE_LUA_DIR")
 _G.hl = {
   window_rule = function(rule)
-    print(string.format("R\t%s\t%s", rule.name or "", tostring(rule.float)))
+    print(string.format("R\t%s\t%s\t%s", rule.name or "", tostring(rule.float), tostring(rule.opaque)))
     for key, value in pairs(rule.match or {}) do
       print(string.format("M\t%s\t%s", key, tostring(value)))
     end
@@ -81,6 +82,31 @@ CASES = [
 ]
 
 
+# (class, expected opaque): filemanagers-fullscreen must hit the file
+# managers' own app ids only. Its old `.*ark.*` / `.*dolphin.*` / `.*nemo.*`
+# also made darktable, dolphin-emu, anemone, ... opaque.
+OPAQUE_CASES = [
+    ("org.kde.dolphin", True),
+    ("dolphin", True),
+    ("org.kde.ark", True),
+    ("ark", True),
+    ("nemo", True),
+    ("Nemo", True),
+    ("org.gnome.Nautilus", True),
+    ("Nautilus", True),
+    ("org.gnome.nautilus", True),
+    ("pcmanfm-qt", True),
+    ("org.darktable.darktable", False),
+    ("dolphin-emu", False),
+    ("anemone", False),
+    ("org.gnome.NautilusPreviewer", False),
+    ("markdown-viewer", False),
+    ("org.kde.dolphinX", False),
+    ("xorg.kde.dolphin", False),
+    ("pcmanfm", False),
+]
+
+
 def load_rules() -> list[dict]:
     out = subprocess.run(
         ["lua", "-e", DUMP],
@@ -95,15 +121,17 @@ def load_rules() -> list[dict]:
 
     rules: list[dict] = []
     for line in out.stdout.splitlines():
-        kind, key, value = line.split("\t", 2)
+        kind, key, *values = line.split("\t")
         if kind == "R":
-            rules.append({"name": key, "float": value, "match": {}})
+            rules.append({"name": key, "float": values[0], "opaque": values[1], "match": {}})
         else:
-            rules[-1]["match"][key] = value
+            rules[-1]["match"][key] = values[0]
     # A file that loads but registers nothing would make every "tile" case
     # pass vacuously.
     if not any(rule["float"] != "nil" for rule in rules):
         sys.exit("FAIL: window_rules.lua registered no float rules")
+    if not any(rule["opaque"] != "nil" for rule in rules):
+        sys.exit("FAIL: window_rules.lua registered no opaque rules")
     for rule in rules:
         for key, pattern in rule["match"].items():
             try:
@@ -113,11 +141,11 @@ def load_rules() -> list[dict]:
     return rules
 
 
-def floating(rules: list[dict], cls: str, title: str) -> bool:
+def prop(rules: list[dict], cls: str, title: str, name: str = "float") -> bool:
     window = {"class": cls, "title": title, "initial_title": title}
     result = False
     for rule in rules:
-        if rule["float"] == "nil":
+        if rule[name] == "nil":
             continue
         matched = True
         for key, pattern in rule["match"].items():
@@ -129,8 +157,12 @@ def floating(rules: list[dict], cls: str, title: str) -> bool:
                 matched = False
                 break
         if matched:
-            result = rule["float"] == "true"
+            result = rule[name] == "true"
     return result
+
+
+def floating(rules: list[dict], cls: str, title: str) -> bool:
+    return prop(rules, cls, title, "float")
 
 
 def main() -> int:
@@ -142,6 +174,11 @@ def main() -> int:
             failures += 1
             want = "float" if expected else "tile"
             print(f"FAIL: {cls} '{title}' should {want}", file=sys.stderr)
+    for cls, expected in OPAQUE_CASES:
+        if prop(rules, cls, "x", "opaque") != expected:
+            failures += 1
+            want = "be" if expected else "not be"
+            print(f"FAIL: {cls} should {want} opaque", file=sys.stderr)
     return 1 if failures else 0
 
 
