@@ -187,8 +187,13 @@ def check_configured(mc) -> None:
         try:
             check(mc.configured("MEDIAPLAYER_PLAYERS", state) == "spotify,vlc",
                   "MEDIAPLAYER_PLAYERS should be read from the HyDE state config")
+            # mediaplayer.py's load_env_file overwrites os.environ with the
+            # config, so the config wins over an inherited value (PR #2215).
             os.environ["MEDIAPLAYER_PLAYERS"] = "mpv"
-            check(mc.configured("MEDIAPLAYER_PLAYERS", state) == "mpv", "the environment should win over the config file")
+            check(mc.configured("MEDIAPLAYER_PLAYERS", state) == "spotify,vlc",
+                  "the HyDE config should win over an inherited environment value")
+            check(mc.configured("MEDIAPLAYER_PLAYERS", state / "missing") == "mpv",
+                  "without a config file the environment value should be used")
             del os.environ["MEDIAPLAYER_PLAYERS"]
             check(mc.configured("MEDIAPLAYER_PLAYERS", state / "missing") is None, "missing config should give None")
         finally:
@@ -223,8 +228,11 @@ def check_pick_player(mc) -> None:
     check(mc.pick_player(pbi, None) == "firefox", "plasma-browser-integration should be skipped")
     check(mc.pick_player([("plasma-browser-integration", "Playing")], None) is None,
           "plasma-browser-integration alone should give None")
-    check(mc.pick_player(players, None, allowed=["vlc", "firefox"]) == "firefox",
-          "MEDIAPLAYER_PLAYERS should limit the choice (first allowed, none playing)")
+    # Like mediaplayer.py, the configured order decides, not MPRIS order.
+    check(mc.pick_player(players, None, allowed=["vlc", "firefox"]) == "vlc",
+          "with no allowed player playing, the first in MEDIAPLAYER_PLAYERS order should win")
+    check(mc.pick_player(players, None, allowed=["vlc", "spotify"]) == "spotify",
+          "a playing allowed player should still win over the configured order")
     check(mc.pick_player(players, None, allowed=["mpv"]) is None, "no allowed player present should give None")
     check(mc.pick_player(players, "spotify", allowed=["vlc"]) == "spotify", "--player should override MEDIAPLAYER_PLAYERS")
     check(mc.allowed_players("spotify, vlc") == ["spotify", "vlc"], "MEDIAPLAYER_PLAYERS should split on commas")
