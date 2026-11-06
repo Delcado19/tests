@@ -249,6 +249,35 @@ class Table(unittest.TestCase):
         self.assertEqual(head.index("Snow") + len("Snow"), row.index("10%") + len("10%"))
         self.assertNotIn("\n", row)
 
+    def test_a_region_without_winter_drops_frost_and_snow_columns(self):
+        # A maintainer asked what a tropical forecast looks like once Fog/Frost/Snow are
+        # fixed columns (HyDE-Project/HyDE#2224 review): a column that is 0% for every row
+        # of every requested day shouldn't permanently cost tooltip width.
+        days = [
+            day([hour(chanceofrain="20"), hour("1200", chanceofrain="80")]),
+            day([hour(chanceofrain="10")], "2026-10-01"),
+        ]
+        _, text = self.rows(days)
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        self.assertIn("Rain", head)
+        self.assertNotIn("Fog", head)
+        self.assertNotIn("Frost", head)
+        self.assertNotIn("Snow", head)
+
+    def test_a_chance_column_stays_if_only_one_day_uses_it(self):
+        # Column drop decisions look at every requested day, not just one.
+        days = [day([hour(chanceoffrost="0")]), day([hour(chanceoffrost="4")], "2026-10-01")]
+        _, text = self.rows(days)
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        self.assertIn("Frost", head)
+
+    def test_all_chance_columns_dropped_leaves_just_hour_temp_sky(self):
+        h = hour(chanceofovercast="0", chanceofrain="0", chanceofsunshine="0", chanceofwindy="0")
+        rows, text = self.rows([day([h])])
+        head = next(ln for ln in text.splitlines() if ln.startswith("Hour"))
+        self.assertEqual(head.split(), ["Hour", "Temp", "Sky"])
+        self.assertNotIn("%", rows[0])
+
     def test_no_trailing_whitespace_on_table_lines(self):
         _, text = self.rows([day([hour(), hour("1200", chanceoffog="9")])])
         for ln in text.splitlines():
