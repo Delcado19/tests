@@ -6,9 +6,14 @@
 # critical app2unit notifications; dunst applies sections in file order, so
 # it only works when it comes after [urgency_critical].
 #
-# This checks the dunstrc that wallbash/scripts/dunst.sh generates, and the
+# swaync has no per-app timeout, only one per urgency (`timeout-critical: 0`),
+# so there the fix is a notification-visibility rule that downgrades critical
+# app2unit notifications to normal, which then use the normal `timeout`.
+#
+# This checks the dunstrc that wallbash/scripts/dunst.sh generates, the
 # pre-generated dunstrc shipped in Configs (active until wallbash first runs),
-# and that ordinary critical notifications keep `timeout = 0`.
+# and the shipped swaync config.json, and that ordinary critical
+# notifications stay sticky in both daemons.
 
 . "$(dirname -- "$0")/lib/common.sh"
 
@@ -61,6 +66,25 @@ check() {
 
 # The shipped file needs no tooling, so it is always checked.
 check "$shipped" "shipped Configs/.config/dunst/dunstrc"
+
+swaync_cfg="$REPO_ROOT/Configs/.config/swaync/config.json"
+if ! command -v jq >/dev/null 2>&1; then
+    skip "jq is not installed, swaync config.json not checked"
+elif ! jq -e . "$swaync_cfg" >/dev/null 2>&1; then
+    fail "swaync config.json is missing or not valid JSON"
+else
+    # swaync uses only the first matching rule, so the app2unit rule must be
+    # the first one that matches a critical app2unit notification; the
+    # shipped rules besides it match other apps only.
+    jq -e '."notification-visibility"["app2unit-error"]
+        | .state == "enabled" and ."app-name" == "^app2unit$"
+          and .urgency == "Critical" and ."override-urgency" == "normal"' \
+        "$swaync_cfg" >/dev/null ||
+        fail "swaync: no 'app2unit-error' rule downgrading critical app2unit notifications to normal"
+    jq -e '(.timeout | type == "number" and . > 0) and ."timeout-critical" == 0' \
+        "$swaync_cfg" >/dev/null ||
+        fail "swaync: needs a positive normal timeout and sticky critical notifications (timeout-critical 0)"
+fi
 
 if ! command -v envsubst >/dev/null 2>&1; then
     skip "envsubst is not installed, generated dunstrc not checked"
