@@ -25,11 +25,15 @@ make_card() { # root card vendor with_temp
     fi
 }
 
-supported() { # drm root -> exit status of lact_gpu_supported
-    LACT_DRM_ROOT="$1" bash -c '
+# nvidia_detect reads the host's real lspci; stub it so the result depends
+# only on the fake sysfs, plus FAKE_LSPCI_NVIDIA for the "lspci sees an
+# NVIDIA card no driver has bound yet" case (#2096 CodeRabbit review).
+supported() { # drm root [lspci_nvidia] -> exit status of lact_gpu_supported
+    LACT_DRM_ROOT="$1" FAKE_LSPCI_NVIDIA="${2:-}" bash -c '
         print_log() { :; }
         . "$REPO_ROOT/Scripts/global_fn.sh" >/dev/null 2>&1
-        lact_gpu_supported' 
+        nvidia_detect() { [ -n "$FAKE_LSPCI_NVIDIA" ]; }
+        lact_gpu_supported'
 }
 
 make_card "$work_dir/intel_igpu" card1 0x8086 no
@@ -49,5 +53,6 @@ supported "$work_dir/hybrid" || fail "Intel iGPU + NVIDIA dGPU was not treated a
 
 mkdir -p "$work_dir/empty"
 supported "$work_dir/empty" && fail "a machine with no DRM cards was treated as supported"
+supported "$work_dir/empty" yes || fail "an NVIDIA GPU seen by lspci but not bound to a driver yet was not treated as supported"
 
 finish

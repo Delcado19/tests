@@ -32,13 +32,13 @@ LACT_TEST_WORK_DIR="$work_dir" XDG_RUNTIME_DIR="$work_dir/runtime" \
 # review). The Intel answer is lactd's real device_clocks_info reply for a
 # Kaby Lake HD 620, which has no gpu_clock_range and used to show "N/A".
 if command -v python3 >/dev/null 2>&1; then
-    python3 - "$REPO_ROOT/Configs/.local/lib/hyde" <<'PY' || fail "lact_gpuinfo.py did not read the max clock from the vendor's clock table"
+    python3 - "$REPO_ROOT/Configs/.local/lib/hyde" <<'PY' || fail "lact_gpuinfo.py did not read the max clock or power from the vendor's reply"
 import sys
 sys.path.insert(0, sys.argv[1])
 import lact_gpuinfo as g
 
-def fields_for(table):
-    replies = {"device_info": {}, "device_stats": {}, "device_clocks_info": {"table": table}}
+def fields_for(table, **top):
+    replies = {"device_info": {}, "device_stats": {}, "device_clocks_info": {"table": table, **top}}
     g.optional_request = lambda payload: replies[payload["command"]]
     return g.device_fields("id", "GPU")
 
@@ -46,7 +46,21 @@ intel = {"type": "intel", "value": {"gt_freq": [300, 1000], "rpn_freq": 300, "rp
 nvidia = {"type": "nvidia", "value": {"gpu_clock_range": [210, 2100]}}
 assert fields_for(intel)["max_clock_speed"] == 1000, fields_for(intel)
 assert fields_for(nvidia)["max_clock_speed"] == 2100, fields_for(nvidia)
+# AMD: lactd reports the maximum as top-level max_sclk, not in the table.
+assert fields_for({"type": "amd", "value": {}}, max_sclk=2615)["max_clock_speed"] == 2615
+assert fields_for(nvidia, max_sclk=999)["max_clock_speed"] == 2100
 assert fields_for({})["max_clock_speed"] is None
+
+# Power: instantaneous first, hwmon's average only when that is missing.
+def power_for(power):
+    replies = {"device_info": {}, "device_stats": {"power": power}, "device_clocks_info": {}}
+    g.optional_request = lambda payload: replies[payload["command"]]
+    return g.device_fields("id", "GPU")["power_usage"]
+
+assert power_for({"average": 45.0}) == 45.0
+assert power_for({"current": 0.0, "average": 45.0}) == 0.0
+assert power_for({"current": 60.0, "average": 45.0}) == 60.0
+assert power_for({}) is None
 PY
 
     # Which temperature the bar shows: lactd's real RTX 2070 answer marks
