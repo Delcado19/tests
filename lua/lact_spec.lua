@@ -43,7 +43,11 @@ local empty_json = lact.generate_json({})
 local ok0, decoded0 = pcall(json.decode, empty_json)
 check(ok0, "generate_json with zero devices did not produce valid JSON")
 check(ok0 and decoded0.text:find("–", 1, true) ~= nil, "zero devices did not render as a dash in the bar text")
-check(ok0 and decoded0.tooltip:find("LACT", 1, true) ~= nil, "the LACT header was missing from the tooltip")
+-- HyDE#2096 review: the module is labelled as GPU monitoring with the
+-- md-expansion_card glyph (U+F08AE), not with the daemon's name.
+check(ok0 and decoded0.tooltip:sub(1, #"\u{f08ae} GPU") == "\u{f08ae} GPU", "the tooltip does not start with the GPU icon and label")
+check(ok0 and decoded0.text:sub(1, #"\u{f08ae}") == "\u{f08ae}", "the bar text does not start with the GPU icon")
+check(ok0 and not decoded0.tooltip:find("LACT", 1, true), "the tooltip header still says LACT")
 -- HyDE#2096 review: the 🧪 marker and the German "Testphase" label are gone.
 check(ok0 and not (decoded0.text .. decoded0.tooltip):find("🧪", 1, true), "the removed 🧪 test marker is back")
 check(ok0 and not decoded0.tooltip:find("Testphase", 1, true), "the removed German \"Testphase\" label is back")
@@ -78,6 +82,7 @@ check(ok1 and decoded1.tooltip:find("180 / 250 W", 1, true) ~= nil, "power usage
 -- (see the TEMP_COLOR_BANDS comment): it must stay uncolored, not just
 -- "any color".
 check(ok1 and not decoded1.text:find("<span", 1, true), "62°C (normal GPU load) should not be colorized")
+check(ok1 and decoded1.tooltip:sub(1, #"\u{f08ae} GPU\n\n") == "\u{f08ae} GPU\n\n", "the GPU header is missing above the device blocks")
 check(ok1 and decoded1.percentage == 62, "percentage did not reflect the single device's temperature")
 
 -- A genuinely hot reading (above the recalibrated "normal" band) must be
