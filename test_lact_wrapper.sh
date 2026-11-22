@@ -22,10 +22,32 @@ lact_module="$REPO_ROOT/Configs/.local/lib/hyde/lact.lua"
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 
-# Isolates lact.lua's state file (the --emoji preference) from the real
+# Own XDG_RUNTIME_DIR so nothing the module might write lands on the real
 # machine, same approach test_gpuinfo_lua_e2e.sh uses for gpuinfo.lua.
 mkdir -p "$work_dir/runtime"
 LACT_TEST_WORK_DIR="$work_dir" XDG_RUNTIME_DIR="$work_dir/runtime" \
     lua "$TESTS_DIR/lua/lact_spec.lua" || fail "lact_spec reported defects"
+
+# lact_gpuinfo.py's max clock per vendor table (HyDE-Project/HyDE#2096
+# review). The Intel answer is lactd's real device_clocks_info reply for a
+# Kaby Lake HD 620, which has no gpu_clock_range and used to show "N/A".
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$REPO_ROOT/Configs/.local/lib/hyde" <<'PY' || fail "lact_gpuinfo.py did not read the max clock from the vendor's clock table"
+import sys
+sys.path.insert(0, sys.argv[1])
+import lact_gpuinfo as g
+
+def fields_for(table):
+    replies = {"device_info": {}, "device_stats": {}, "device_clocks_info": {"table": table}}
+    g.optional_request = lambda payload: replies[payload["command"]]
+    return g.device_fields("id", "GPU")
+
+intel = {"type": "intel", "value": {"gt_freq": [300, 1000], "rpn_freq": 300, "rpe_freq": 300, "rp0_freq": 1000}}
+nvidia = {"type": "nvidia", "value": {"gpu_clock_range": [210, 2100]}}
+assert fields_for(intel)["max_clock_speed"] == 1000, fields_for(intel)
+assert fields_for(nvidia)["max_clock_speed"] == 2100, fields_for(nvidia)
+assert fields_for({})["max_clock_speed"] is None
+PY
+fi
 
 finish

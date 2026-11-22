@@ -19,8 +19,8 @@ assert(work_dir, "LACT_TEST_WORK_DIR must be set by the test wrapper")
 -- which these unit tests must not depend on).
 check(lact.format_temperature(0, true) == "32°F", "Fahrenheit conversion was incorrect")
 check(lact.format_temperature(100, false) == "100°C", "Celsius formatting was incorrect")
-check(lact.format_temperature(nil) == "N/A", "a nil temperature did not render as N/A")
-check(lact.format_temperature("[N/A]") == "N/A", "a literal [N/A] string did not render as N/A")
+check(lact.format_temperature(nil) == "–", "a nil temperature did not render as a dash")
+check(lact.format_temperature("[N/A]") == "–", "a literal [N/A] string did not render as a dash")
 check(lact.format_temperature("not-a-number", false) == "not-a-number", "a non-numeric string should pass through unchanged")
 
 -- map_floor: same threshold-selection contract as gpuinfo.lua's version.
@@ -42,8 +42,11 @@ check(#mixed == 1 and mixed[1].primary_gpu == "Real GPU", "a devices list with n
 local empty_json = lact.generate_json({})
 local ok0, decoded0 = pcall(json.decode, empty_json)
 check(ok0, "generate_json with zero devices did not produce valid JSON")
-check(ok0 and decoded0.text:find("N/A", 1, true) ~= nil, "zero devices did not render as N/A in the bar text")
-check(ok0 and decoded0.tooltip:find("LACT", 1, true) ~= nil, "the experimental-test-phase marker was missing from the tooltip")
+check(ok0 and decoded0.text:find("–", 1, true) ~= nil, "zero devices did not render as a dash in the bar text")
+check(ok0 and decoded0.tooltip:find("LACT", 1, true) ~= nil, "the LACT header was missing from the tooltip")
+-- HyDE#2096 review: the 🧪 marker and the German "Testphase" label are gone.
+check(ok0 and not (decoded0.text .. decoded0.tooltip):find("🧪", 1, true), "the removed 🧪 test marker is back")
+check(ok0 and not decoded0.tooltip:find("Testphase", 1, true), "the removed German \"Testphase\" label is back")
 
 -- generate_json: nil/non-table devices argument must degrade the same way,
 -- not raise.
@@ -69,8 +72,8 @@ local full = lact.generate_json({
 local ok1, decoded1 = pcall(json.decode, full)
 check(ok1, "generate_json with a full field set did not produce valid JSON")
 check(ok1 and decoded1.tooltip:find("AMD RDNA3 Radeon RX 7800", 1, true) ~= nil, "vendor/family/name were not combined in the tooltip label")
-check(ok1 and decoded1.tooltip:find("1800/2600 MHz", 1, true) ~= nil, "clock speed segment was missing/wrong")
-check(ok1 and decoded1.tooltip:find("180/250 W", 1, true) ~= nil, "power usage segment was missing/wrong")
+check(ok1 and decoded1.tooltip:find("1800 / 2600 MHz", 1, true) ~= nil, "clock speed segment was missing/wrong")
+check(ok1 and decoded1.tooltip:find("180 / 250 W", 1, true) ~= nil, "power usage segment was missing/wrong")
 -- 62°C is normal GPU operating temperature under the recalibrated scale
 -- (see the TEMP_COLOR_BANDS comment): it must stay uncolored, not just
 -- "any color".
@@ -85,14 +88,15 @@ check(okh, "generate_json for a hot GPU did not produce valid JSON")
 check(okh and decodedh.text:find("<span color=", 1, true) ~= nil, "a 90°C GPU (hot under the recalibrated scale) was not colorized")
 
 -- generate_json: missing fields on an otherwise real device must render as
--- N/A, not raise or produce "nil" text.
+-- a dash, not raise or produce "nil"/"N/A" text (HyDE#2096 review).
 local sparse = lact.generate_json({{primary_gpu = "Bare GPU"}})
 local ok2, decoded2 = pcall(json.decode, sparse)
 check(ok2, "generate_json with a mostly-empty device did not produce valid JSON")
-check(ok2 and decoded2.tooltip:find("Temperature: N/A", 1, true) ~= nil, "a missing temperature was not rendered as N/A")
-check(ok2 and decoded2.tooltip:find("Utilization: N/A", 1, true) ~= nil, "a missing utilization was not rendered as N/A")
-check(ok2 and decoded2.tooltip:find("Clock Speed: N/A/N/A MHz", 1, true) ~= nil, "missing clocks were not rendered as N/A")
-check(ok2 and decoded2.tooltip:find("Power Usage: N/A/N/A W", 1, true) ~= nil, "missing power values were not rendered as N/A")
+check(ok2 and decoded2.tooltip:find("Temperature: –", 1, true) ~= nil, "a missing temperature was not rendered as a dash")
+check(ok2 and decoded2.tooltip:find("Utilization: –", 1, true) ~= nil, "a missing utilization was not rendered as a dash")
+check(ok2 and decoded2.tooltip:find("Clock Speed: – / – MHz", 1, true) ~= nil, "missing clocks were not rendered as dashes")
+check(ok2 and decoded2.tooltip:find("Power Usage: – / – W", 1, true) ~= nil, "missing power values were not rendered as dashes")
+check(ok2 and not decoded2.tooltip:find("N/A", 1, true), "N/A leaked into the tooltip instead of a dash")
 check(ok2 and not decoded2.text:find("<span", 1, true), "a device with no real temperature should not be colorized")
 
 -- generate_json: daemon-supplied strings (vendor/family/name) are rendered
@@ -162,10 +166,8 @@ check(garbage_ok, "a non-table device entry raised instead of being skipped")
 local ok6 = garbage_ok and pcall(json.decode, garbage_json)
 check(ok6, "a devices list with a garbage entry mixed in did not produce valid JSON")
 
--- cli_main end to end: cold call with a fixed lact_output produces exactly
--- one JSON line, and --emoji/--reset persist/clear across invocations via
--- the real state file (isolated to this test's own XDG_RUNTIME_DIR).
-os.remove(lact.state_path())
+-- cli_main end to end: a call with a fixed lact_output produces exactly
+-- one JSON line.
 local lines = {}
 local code = lact.cli_main({}, {
     print_fn = function(s) lines[#lines + 1] = s end,
@@ -176,11 +178,9 @@ check(#lines == 1, "cli_main printed something other than exactly one line: " ..
 local ok7 = pcall(json.decode, lines[1] or "")
 check(ok7, "cli_main's single printed line was not valid JSON")
 
-lact.cli_main({"--emoji"}, {print_fn = function() end, lact_output = "{}"})
-check(lact.read_state().emoji == true, "--emoji did not persist across invocations")
-
-lact.cli_main({"--reset"}, {print_fn = function() end, lact_output = "{}"})
-check(not lact.read_state().emoji, "--reset did not clear a previously-set --emoji flag")
+-- HyDE#2096 review: the --emoji/--reset click actions (and their state
+-- file) were dropped, so they are now just unknown flags.
+check(lact.state_path == nil, "the removed state-file helpers are back")
 
 -- An unrecognized flag must warn, not crash the render.
 local warn_lines = {}
@@ -191,7 +191,5 @@ local unknown_ok = pcall(lact.cli_main, {"--bogus"}, {
 })
 check(unknown_ok, "an unrecognized CLI flag raised instead of warning and continuing")
 check(#warn_lines > 0, "an unrecognized CLI flag was silently ignored instead of warned about")
-
-os.remove(lact.state_path())
 
 os.exit(failures == 0 and 0 or 1)
