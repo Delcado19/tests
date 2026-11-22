@@ -157,9 +157,43 @@ if ok5 then
     local _, count = decoded5.text:gsub("<span color=", "")
     span_count = count
 end
-check(span_count == 2, "each GPU in a multi-GPU bar should carry its own independent color span, got " .. tostring(span_count))
+-- Only the hot GPU is colored: below 75°C the text keeps the theme color
+-- (HyDE#2096 review: the former cold blue was unreadable on dark themes).
+check(span_count == 1, "only the hot GPU should carry a color span in a multi-GPU bar, got " .. tostring(span_count))
+check(ok5 and not decoded5.text:find("#4169e1", 1, true), "the removed cold blue is back")
 check(ok5 and decoded5.tooltip:find("Hot GPU", 1, true) ~= nil and decoded5.tooltip:find("Cool GPU", 1, true) ~= nil, "both GPUs' names were not present in the tooltip")
 check(ok5 and decoded5.percentage == 90, "the hottest GPU should drive the overall percentage/class bucket, got " .. tostring(ok5 and decoded5.percentage))
+
+-- HyDE#2096 review/NVIDIA test: every sensor gets its own tooltip line with
+-- the thermometer icon, the bar keeps the one main reading, power is whole
+-- watts, a stopped fan says so, and the critical red is readable on dark
+-- themes (not the former #8b0000).
+local sensors = lact.generate_json({
+    {
+        primary_gpu = "RTX 2070",
+        temperature = 37,
+        temperatures = {
+            {label = "GPU", value = 37.0},
+            {label = "GPU Hotspot", value = 53.0},
+            {label = "VRAM", value = 96.0},
+            {label = "Broken", value = "garbage"},
+        },
+        power_usage = 60.014,
+        power_limit = 175.0,
+        fan_speed = 0,
+    },
+})
+local ok8, decoded8 = pcall(json.decode, sensors)
+check(ok8, "generate_json with several temperature sensors did not produce valid JSON")
+check(ok8 and decoded8.text == "\u{f08ae} 37°C", "the bar did not show just the main temperature: " .. tostring(ok8 and decoded8.text))
+check(ok8 and decoded8.tooltip:find("\u{f050f} GPU: 37°C\n\u{f050f} GPU Hotspot: 53°C\n\u{f050f} VRAM: <span color='#ff2020'>96°C</span>", 1, true) ~= nil,
+    "the sensors were not listed one per line with icon and color: " .. tostring(ok8 and decoded8.tooltip))
+check(ok8 and not decoded8.tooltip:find("Broken", 1, true), "a sensor with a non-numeric value was rendered")
+check(ok8 and not decoded8.tooltip:find("Temperature:", 1, true), "the generic Temperature line was shown although sensors were listed")
+check(ok8 and decoded8.tooltip:find("Power Usage: 60 / 175 W", 1, true) ~= nil, "power was not rounded to whole watts")
+check(ok8 and decoded8.tooltip:find("Fan Speed: 0 RPM (stopped)", 1, true) ~= nil, "a stopped fan was not labelled as stopped")
+check(ok8 and not decoded8.tooltip:find("#8b0000", 1, true), "the removed dark red is back")
+check(ok1 and decoded1.tooltip:find("Temperature: 62°C", 1, true) ~= nil, "a device without a sensor list lost its Temperature line")
 
 -- generate_json: a garbage (non-table) entry inside an otherwise valid
 -- devices list must be skipped, not crash the whole render.

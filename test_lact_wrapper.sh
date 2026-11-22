@@ -48,6 +48,35 @@ assert fields_for(intel)["max_clock_speed"] == 1000, fields_for(intel)
 assert fields_for(nvidia)["max_clock_speed"] == 2100, fields_for(nvidia)
 assert fields_for({})["max_clock_speed"] is None
 PY
+
+    # Which temperature the bar shows: lactd's real RTX 2070 answer marks
+    # GPU, GPU Hotspot and VRAM all "primary"; only GPU is not display_only.
+    # Listed here with Hotspot first so the old "first primary wins" logic
+    # would pick the wrong one (HyDE-Project/HyDE#2096 NVIDIA test).
+    python3 - "$REPO_ROOT/Configs/.local/lib/hyde" <<'PY' || fail "lact_gpuinfo.py picked the wrong main temperature or dropped sensors"
+import sys
+sys.path.insert(0, sys.argv[1])
+import lact_gpuinfo as g
+
+temps = {
+    "GPU Hotspot": {"current": 53.0, "primary": True, "display_only": True},
+    "GPU": {"current": 37.0, "primary": True, "display_only": False},
+    "VRAM": {"current": 53.0, "primary": True, "display_only": True},
+    "Broken": {"current": None, "primary": True, "display_only": False},
+}
+replies = {"device_info": {}, "device_stats": {"temps": temps}, "device_clocks_info": {}}
+g.optional_request = lambda payload: replies[payload["command"]]
+fields = g.device_fields("id", "GPU")
+assert fields["temperature"] == 37.0, fields
+assert [t["label"] for t in fields["temperatures"]] == ["GPU", "GPU Hotspot", "VRAM"], fields
+
+replies["device_stats"] = {"temps": {"edge": {"current": 41.0}}}
+assert g.device_fields("id", "GPU")["temperature"] == 41.0
+
+replies["device_stats"] = {}
+fields = g.device_fields("id", "GPU")
+assert fields["temperature"] is None and fields["temperatures"] == [], fields
+PY
 fi
 
 finish
