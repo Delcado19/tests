@@ -13,7 +13,8 @@ This covers: both call sites that go through _signal_waybar (restart_waybar's
 SIGUSR2 hot-reload, and SIGUSR1 as used by --hide), the non-systemd pkill
 fallback (must stay unaffected), and that restart_waybar() takes the reload
 path only when Waybar is already running, falling back to a plain start
-otherwise -- a change that keeps the shape but breaks the behaviour, like an
+otherwise. Since HyDE-Project/HyDE#2193 that reload path is non-systemd
+only; with systemd restart_waybar() restarts the unit instead. A change that keeps the shape but breaks the behaviour, like an
 accidentally dropped --kill-who or a flag landing after the unit name instead
 of before it, should fail this.
 """
@@ -105,11 +106,13 @@ calls = calls_for("not-a-signal", has_systemd=True)
 if not calls or "not-a-signal" not in calls[0]:
     fail(f"an arbitrary sig string is not forwarded verbatim: {calls}")
 
-# 5. restart_waybar() must take the reload path (_signal_waybar) only when
-# Waybar is already running, and start_waybar() otherwise -- the --kill-who
-# fix is pointless if a currently-running check regression made it call the
-# wrong branch.
-wb.HAS_SYSTEMD = True
+# 5. Without systemd, restart_waybar() must take the reload path
+# (_signal_waybar) only when Waybar is already running, and start it
+# otherwise -- the --kill-who fix is pointless if a currently-running check
+# regression made it call the wrong branch. With systemd it no longer
+# signals at all: HyDE-Project/HyDE#2193 replaced that hot-reload with a
+# `systemctl restart` of the unit, checked last.
+wb.HAS_SYSTEMD = False
 with mock.patch.object(wb, "is_waybar_running_for_current_user", return_value=True), \
      mock.patch.object(wb, "_signal_waybar") as signal_mock, \
      mock.patch.object(wb, "run_waybar") as run_mock:
@@ -128,5 +131,17 @@ with mock.patch.object(wb, "is_waybar_running_for_current_user", return_value=Fa
         fail("restart_waybar() signalled a non-running Waybar instead of starting it")
     if not run_mock.called:
         fail("restart_waybar() did not start Waybar when it was not running")
+
+wb.HAS_SYSTEMD = True
+with mock.patch.object(wb, "is_waybar_running_for_current_user", return_value=True), \
+     mock.patch.object(wb, "_signal_waybar") as signal_mock, \
+     mock.patch.object(wb, "run_waybar"), \
+     mock.patch.object(wb.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+    wb.restart_waybar()
+    if signal_mock.called:
+        fail(f"restart_waybar() signalled the systemd unit instead of restarting it: "
+             f"{signal_mock.call_args}")
+    if ["systemctl", "--user", "restart", wb.UNIT_NAME] not in [c.args[0] for c in run.call_args_list]:
+        fail(f"restart_waybar() did not restart the systemd unit: {run.call_args_list}")
 
 sys.exit(1 if failures else 0)
